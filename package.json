@@ -1,0 +1,16 @@
+{
+  "name": "penumbra-spec",
+  "version": "0.1.0-draft",
+  "private": true,
+  "description": "Cross-platform plausible-deniability spec — tooling for validation and linting",
+  "scripts": {
+    "validate": "ajv validate -s schemas/manifest.schema.json -d \"examples/*.json\" && ajv validate -s schemas/decoy-content.schema.json -d \"conformance/test-vectors/03-decoy/*.json\"",
+    "lint": "markdownlint \"spec/**/*.md\" \"README.md\" \"CHANGELOG.md\"",
+    "xref": "node tools/xref-lint.mjs",
+    "ci": "npm run validate && npm run lint && npm run xref"
+  },
+  "devDependencies": {
+    "ajv-cli": "^5.0.0",
+    "markdownlint-cli": "^0.41.0"
+  }
+}
