@@ -77,6 +77,13 @@ accumulate over time. Hosts compose richer behavior (e.g., debounced input,
 multi-method composition, rate-limiting) outside the `AuthChallenge` boundary,
 on top of this interface.
 
+Hosts `MUST` call `reset()` on every state transition out of
+`Authenticating` (regardless of which terminal `AuthResult` was returned),
+and on the `Active → Disguised` transition (when the user explicitly locks
+or the app is backgrounded). This satisfies the in-memory invariant in
+`00-architecture.md`: no unlock credential remains in memory in
+`Disguised` or `Decoyed`.
+
 ### AuthResult
 
 `verify()` returns exactly one `AuthResult` value: `Unlock`, `Duress`,
@@ -158,11 +165,16 @@ rate-limit-induced sleep applied before the timing window starts.
 recovery passphrase, signaling that the user wants to restore data via a
 `RecoveryKey`. Receipt of `Recover` triggers the
 `Authenticating → Recovering` transition. The transition is only valid when
-the configured `WipeTier` in the `Manifest` is `Recoverable-Lock`; an
-implementation that receives `Recover` under any other `WipeTier` `MUST`
-treat it as `Reject` and proceed accordingly. Only the `recovery-passphrase`
-method in the registry is permitted to return `Recover`; any other method
-returning `Recover` is a conformance violation.
+the configured `WipeTier` in the `Manifest` is `Recoverable-Lock`. If
+schema validation has been bypassed (an out-of-spec scenario the spec
+does not endorse), the implementation `SHOULD` treat any `Recover` return
+as `Reject` rather than transitioning to `Recovering`; a conformant
+implementation that has loaded a `Manifest` validated against
+`manifest.schema.json` will never encounter this case, since the schema
+`MUST` reject configurations that include `recovery-passphrase` outside
+`Recoverable-Lock`. Only the `recovery-passphrase` method in the registry
+is permitted to return `Recover`; any other method returning `Recover` is
+a conformance violation.
 
 ## Timing Contract
 
@@ -493,6 +505,16 @@ gate's `Unlock` is consumed by the composition logic (see Composition
 Rules) and the composite's outcome is determined by the non-gate methods.
 The gate `MUST-NOT` return `Duress` or `Recover`.
 
+DST and timezone-database handling. Implementations `MUST` use the IANA
+tzdb resolution available on the host at evaluation time. On DST-transition
+days, a configured window that would reference a non-existent local time
+(e.g., 02:30 on a spring-forward day) `MUST-NOT` match. A configured window
+that would reference a doubly-occurring local time (e.g., 01:30 on a
+fall-back day) matches both occurrences. Tzdb updates between deployment
+and evaluation `MAY` change gate outcomes for windows near transition
+boundaries; this is by design — implementations `MUST-NOT` cache stale
+tzdb data to preserve outcome stability.
+
 Timing notes. The check is cheap; the timing window applies as elsewhere.
 
 Tier compatibility. `MAY` at all tiers as a composition gate. `MUST-NOT`
@@ -509,10 +531,11 @@ distinguish unlock from duress.
 
 ```typescript
 interface LocationGateInput {
-  // Current latitude in decimal degrees.
-  lat: number;
-  // Current longitude in decimal degrees.
-  lon: number;
+  // Current latitude in decimal degrees, or null if no fix is available
+  // (GPS off, permission denied, indoors with no fallback, etc.).
+  lat: number | null;
+  // Current longitude in decimal degrees, or null if no fix is available.
+  lon: number | null;
   // Reported accuracy radius in meters. Implementations SHOULD reject
   // (return Reject) when accuracy is worse than the smallest configured
   // zone radius, since coarse fixes degrade the gate's value.
@@ -543,6 +566,14 @@ the zone's configured radius. If any zone matches, the gate returns
 `Unlock` is consumed by the composition logic and the composite's outcome
 derives from the non-gate methods. The gate `MUST-NOT` return `Duress` or
 `Recover`.
+
+No-fix handling. If the host cannot acquire a location fix at evaluation
+time (GPS off, permission denied, indoors with no fallback, etc.), the
+host `MUST` invoke `verify()` with both lat and lon set to `null`. The
+gate `MUST` return `Reject` whenever either coordinate is `null`,
+regardless of the reported accuracy radius. The host `MUST-NOT` substitute
+a stale cached fix older than the deployment-configured maxFixAgeMs
+(default: 60000 ms).
 
 Timing notes. Acquiring a device location fix can take seconds and is
 asynchronous; the host `MUST` perform the location fix outside the timing
@@ -582,18 +613,24 @@ interface PairedDeviceConfig {
   // The device identifier (Bluetooth address or platform-specific ID)
   // of the expected paired companion.
   pairedDeviceId: string;
-  // The shared secret used to sign challenges. Stored hashed in the
-  // Manifest; the host derives the live key for the comparison.
+  // Opaque port-defined identifier referencing the live shared MAC key
+  // held in platform secure storage (iOS Keychain / Android Keystore).
+  // The Manifest carries only this identifier; it MUST NOT carry the
+  // plaintext or any hashed form of the live key itself.
   challengeKey: string;
 }
 ```
 
-Verification rules. The implementation verifies that the received response
-is the expected MAC of the issued challenge under the configured shared
-key, using a constant-time comparison. If the response is missing or
-invalid, returns `Reject`. A valid response returns `Unlock`. This method
-does not distinguish unlock from duress on its own; deployments that need
-a duress path `MUST` compose `paired-device` with another method
+Verification rules. The `Manifest` carries an opaque challengeKey
+identifier that the port resolves to the live symmetric MAC key held in
+platform secure storage (iOS Keychain / Android Keystore). The
+implementation verifies that the received response is the expected MAC of
+the issued challenge under that resolved live key, using a constant-time
+comparison. The `Manifest` `MUST-NOT` carry plaintext or hashed forms of
+the live key — only the identifier that references it. If the response is
+missing or invalid, returns `Reject`. A valid response returns `Unlock`.
+This method does not distinguish unlock from duress on its own; deployments
+that need a duress path `MUST` compose `paired-device` with another method
 (typically `pin-sequence`) under `all`, where the other method drives the
 unlock vs. duress decision.
 
@@ -601,14 +638,32 @@ Timing notes. Bluetooth challenge-response can take hundreds of
 milliseconds; the host `MUST` complete the round-trip outside the timing
 window, populate the input payload with the received response, then invoke
 `verify()` so the cheap MAC comparison fits inside the 300–600 ms budget.
-The Bluetooth pairing lifecycle (initial pairing, repairing on companion
-replacement) is a host concern.
+Bluetooth timeouts can run several seconds while in-range round-trips
+complete in well under a second; without uniform host-layer latency this
+distinction leaks an in-range vs. out-of-range signal even when `verify()`
+itself is uniform. To defeat that leak, hosts using `paired-device` `MUST`
+apply a uniform fixed timeout to the Bluetooth challenge-response
+round-trip and `MUST` always wait the full timeout duration before
+invoking `verify()`, regardless of when (or whether) a response arrives.
+The default uniform timeout `SHOULD` be 2000 ms; deployments `MAY` override
+but `MUST-NOT` use a value below 1000 ms (insufficient for slow companion
+devices) or above 5000 ms (too disruptive to UX). The `verify()` call
+itself still respects the 300–600 ms timing window; total observable
+latency is the uniform fixed timeout plus the 300–600 ms window, which is
+independent of in-range versus out-of-range. The Bluetooth pairing
+lifecycle (initial pairing, repairing on companion replacement) is a host
+concern.
 
 Tier compatibility. `MAY` at all tiers. Typically composed under `all` with
 `pin-sequence` or another credential-bearing method. `MAY` improve `Casual`
 deployments by raising the cost of opportunistic access; the spec makes no
 stronger claim against `Coercion` or `Advanced` adversaries who can also
 seize the companion device.
+
+Tier compatibility note: `paired-device` `MUST` be composed under `all` with
+at least one method that satisfies the Numeric/sequence `AuthChallenge` row
+of the Per-Tier Feature Matrix in `00-architecture.md`. Standalone use of
+`paired-device` is a conformance violation at every tier.
 
 ### recovery-passphrase
 
@@ -755,7 +810,10 @@ source code, environment variables, JavaScript bundles, native config
 files, application assets, telemetry payloads, or remote services. This is
 normative and applies to every method in the registry whose config carries
 hashed credentials (`pin-sequence`, `gesture-pattern`, `knock-pattern`,
-`recovery-passphrase`, and the shared-key field of `paired-device`).
+`recovery-passphrase`). The paired-device challengeKey field is not a
+hashed credential — it is an opaque identifier referencing the live MAC
+key held in platform secure storage; the live key itself never appears in
+the `Manifest` in any form.
 
 The Galois reference implementation's environment-variable defaults are
 non-conformant with this requirement:
