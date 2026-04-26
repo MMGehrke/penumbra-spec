@@ -55,8 +55,9 @@ interface AuthInput {
 
   // Wall-clock timestamp of input receipt, in milliseconds since epoch.
   // Required so methods that incorporate time (e.g., time-window-gate)
-  // operate against a consistent reference. Hosts MUST use the same
-  // monotonic source for input receipt across all methods in a Manifest.
+  // operate against a consistent reference. Hosts MUST populate this from
+  // a single consistent wall-clock source so methods that compare against
+  // configured time windows operate against a stable reference.
   receivedAt: number;
 }
 
@@ -76,15 +77,26 @@ accumulate over time. Hosts compose richer behavior (e.g., debounced input,
 multi-method composition, rate-limiting) outside the `AuthChallenge` boundary,
 on top of this interface.
 
+### AuthResult
+
+`verify()` returns exactly one `AuthResult` value: `Unlock`, `Duress`,
+`Reject`, or `Recover`. The semantics of each value — which state-machine
+transition it triggers and what side effects the host `MUST` perform — are
+defined in the Return Semantics section below. Implementations `MUST-NOT`
+introduce additional `AuthResult` values; ports that need to express
+intermediate states (e.g., "input accepted but not yet terminal") `MUST`
+represent them within `Reject` plus accumulated internal state, never as a
+new return value.
+
 ### AuthInput
 
 Every `verify()` call receives an `AuthInput` value. The `AuthInput` envelope
 is fixed at the interface level — its payload carries method-specific
 structured data (defined per-method in the Method Registry below) and a
 numeric receipt timestamp accompanies it for time-aware methods. Hosts
-`MUST` populate the timestamp from a single monotonic source so methods
-that compare against configured time windows operate against a stable
-reference.
+`MUST` populate the timestamp from a single consistent wall-clock source so
+methods that compare against configured time windows operate against a
+stable reference.
 
 ### AuthConfig
 
@@ -96,7 +108,7 @@ to load a `Manifest` whose auth-config does not validate; per-call
 re-validation is not required if validation has already succeeded for the
 loaded `Manifest`.
 
-## AuthResult
+## Return Semantics
 
 `verify()` returns exactly one of four values. The state machine in
 `00-architecture.md` consumes this value and performs the corresponding
@@ -145,9 +157,9 @@ rate-limit-induced sleep applied before the timing window starts.
 `Recover` indicates that the presented credential matched the configured
 recovery passphrase, signaling that the user wants to restore data via a
 `RecoveryKey`. Receipt of `Recover` triggers the
-`Authenticating → Recovering` transition. `Recover` is `MUST-NOT` valid unless
+`Authenticating → Recovering` transition. The transition is only valid when
 the configured `WipeTier` in the `Manifest` is `Recoverable-Lock`; an
-implementation that receives `Recover` in any other configuration `MUST`
+implementation that receives `Recover` under any other `WipeTier` `MUST`
 treat it as `Reject` and proceed accordingly. Only the `recovery-passphrase`
 method in the registry is permitted to return `Recover`; any other method
 returning `Recover` is a conformance violation.
@@ -705,6 +717,10 @@ above; there are no duress-suffixed or recover-suffixed IDs. The composite's
   leaves returned `Unlock` (gates and credential-bearing methods alike),
   the composite returns `Unlock`. This rule ensures a duress credential
   always invokes the wipe even when bundled with a passing gate.
+- `Recover` is unreachable inside any composition because
+  `recovery-passphrase` is standalone-only (see the per-method standalone
+  rule above). The precedence rule above therefore does not need to handle
+  `Recover`.
 - For an `any` composition, the composite returns the outcome of the first
   leaf that returned a non-`Reject` value. Implementations `MUST` evaluate
   `any` leaves in declaration order and `MUST` short-circuit on the first
