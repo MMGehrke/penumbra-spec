@@ -170,6 +170,14 @@ interface WipeHandler {
   // recovery key via context.recoveryKey; that field is undefined for
   // every other tier.
   execute(context: WipeContext): Promise<WipeResult>;
+
+  // ONLY required when tier is "Recoverable-Lock". For other tiers MUST
+  // be undefined. Invoked by the SDK during degrade-to-medium fallback
+  // when fetchForWipe() fails. MUST destroy the resources this handler
+  // would otherwise have encrypted, with semantics equivalent to a
+  // Medium-tier handler operating on the same resources. The same
+  // idempotence requirement that applies to execute() applies here.
+  destroyFallback?: (context: WipeContext) => Promise<WipeResult>;
 }
 ```
 
@@ -204,9 +212,16 @@ interface WipeContext {
   // does not read this field — the SDK uses it to decide what to do
   // if execute() throws — but it is included in WipeContext so audit
   // implementations have a unified record of what policy was in effect.
-  failurePolicy: "fail-open" | "fail-closed";
+  failurePolicy: "fail-open" | "fail-closed" | "degrade-to-medium";
 }
 ```
+
+The degrade-to-medium value of failurePolicy appears only when the SDK
+is invoking a `Recoverable-Lock` handler's `destroyFallback()` after
+`fetchForWipe()` failure. In that case, the audit-log entry uses
+degrade-to-medium so that post-recovery review can identify why a
+handler destroyed instead of encrypting; the handler itself still does
+not read this field.
 
 Ports `MUST` use the platform's idiomatic byte-array type for the recovery
 key field — Data on iOS, ByteArray on Kotlin, Uint8List on Dart, the
@@ -291,7 +306,7 @@ The selection determines which sets of registered handlers execute on
 `DuressEvent`, with the tier-cascade rule defined in Wipe Tiers above:
 `Soft` runs by itself; `Medium` runs all `Soft` then all `Medium`; `Hard`
 runs all `Soft` then all `Medium` then all `Hard`. `Recoverable-Lock` runs
-all `Soft` then all `Recoverable-Lock`. Recoverable-Lock is mutually
+all `Soft` then all `Recoverable-Lock`. `Recoverable-Lock` is mutually
 exclusive with `Medium` and `Hard` *per resource*: a `Manifest` that
 registers the same resource under both a destroying tier and
 `Recoverable-Lock` `MUST` fail validation.
@@ -344,10 +359,11 @@ derived from device-bound material plus the loaded `Manifest` fingerprint.
 The flag records, for each tier, which handlers have confirmed successful
 completion. On the next launch after an interruption, the SDK detects the
 flag during `Init` (per the Failure-Mode Transitions section of
-`00-architecture.md`), determines the lowest tier with unconfirmed handlers,
-and resumes the wipe chain from that tier. The state machine `MUST-NOT`
-transition to `Active` until all handlers at the active tier and all lower
-tiers have confirmed success or applied fail-open.
+`00-architecture.md`), determines the earliest unfinished position in the
+cascade `Soft` → `Medium` → `Hard` → `Recoverable-Lock`, and resumes the
+wipe chain from that position. The state machine `MUST-NOT` transition to
+`Active` until all handlers at the active tier and all tiers earlier in
+the cascade have confirmed success or applied fail-open.
 
 The progress flag itself is part of the wipe protocol's confidentiality
 surface. The flag `MUST` be readable only by code paths that have already
@@ -359,6 +375,26 @@ indistinguishable from random bytes. This guards the worst-case scenario
 where the device is seized between an interrupted wipe and the next launch:
 an inspector who powers on the device sees the disguise, not "wipe in
 progress."
+
+The encrypted progress flag's key derivation is normative for porting:
+
+- The device-bound material `MUST` be a key held in the platform secure
+  element (iOS Secure Enclave, Android StrongBox, or hardware-backed
+  Android Keystore). It `SHOULD` not be a software-derivable identifier
+  such as IDFV, SSAID, advertising ID, or MAC address — those are not
+  secret and would let an on-device-storage adversary recompute the key
+  and read the flag.
+- The `Manifest` fingerprint is `SHA-256(canonical-JSON(Manifest))`. The
+  canonicalization rules (key sorting, whitespace handling, number
+  formatting) are specified in `schemas/manifest.schema.json` (forward
+  reference; v0.1 schema authoring is a later task). Every conformant SDK
+  `MUST` use the same canonicalization so that two ports compute identical
+  fingerprints for the same `Manifest`.
+- The flag is encrypted with AES-256-GCM (or platform-equivalent AEAD).
+  The nonce is a fresh 12-byte random value per flag write. The
+  associated-data field includes the spec version string. The plaintext
+  payload encodes tier progress as JSON of the form
+  `{ "tier": "Soft" | "Medium" | "Hard" | "Recoverable-Lock", "completedHandlerIds": string[] }`.
 
 When the SDK resumes a wipe, the user-visible disguise persists throughout
 the resumed run. The resumed wipe completes (or applies fail-open) before
@@ -527,13 +563,24 @@ manifest-configured wipeProtocol.recoveryUnreachablePolicy. The two
 permitted policies are:
 
 - **degrade-to-medium** (default) — the SDK abandons the
-  `Recoverable-Lock` plan and runs the `Medium` tier instead, destroying
-  the data. Appropriate for deployments where data loss is preferable to
-  leaving plaintext.
+  `Recoverable-Lock` plan and runs `Medium`-equivalent destruction
+  instead. Concretely, the SDK `MUST` invoke each pending
+  `Recoverable-Lock` handler's `destroyFallback()` (not `execute()`) on
+  the `Recoverable-Lock` resource set; the destroyFallback contract is
+  defined in the `WipeHandler` Interface section above. Appropriate for
+  deployments where data loss is preferable to leaving plaintext.
 - **fail-closed** — the SDK halts the wipe and transitions back to
   `Disguised` per the `Wiping → Disguised` transition in
   `00-architecture.md`. Appropriate for deployments where the recovery use
   case is essential and data loss would be worse than the missed wipe.
+
+Because degrade-to-medium is the default, every `Recoverable-Lock`
+handler `MUST` declare a destroyFallback. The SDK `MUST` reject
+registration of a `Recoverable-Lock` handler whose destroyFallback is
+absent, with the same diagnostic-error semantics applied to other
+registration failures in the Registration subsection above. This makes
+the destruction path reachable regardless of network state at duress
+time.
 
 The default is degrade-to-medium because the most common provider-
 unreachable scenario is "no network at the border crossing"; in that
@@ -549,7 +596,11 @@ encrypt its registered data. As soon as the handler's `execute()` resolves
 (success or failure), the SDK `MUST` zero the key bytes from memory, and
 the handler `MUST` zero any local copies it made. The same applies to
 `fetchForRecovery()`: the key is held only for the duration of the
-re-decryption step, then zeroed.
+re-decryption step, then zeroed. Both SDK-level and handler-side zeroing
+`MUST` use the platform's strongest available zeroing primitive per the
+`WipeContext` interface section above (memset_s on Apple platforms;
+explicit byte fill plus a memory barrier on platforms that lack a
+guaranteed-non-elidable primitive).
 
 Hosts `SHOULD` use platform-provided memory-locking primitives where
 available (mlock on POSIX, VirtualLock on Windows, the equivalent
@@ -729,6 +780,13 @@ cumulative wall-clock; the third attempt waits 2000 ms after the second.
 Implementations `MUST` apply jitter of ±20% to each delay to prevent
 thundering-herd retries against shared infrastructure.
 
+networkPolicy.onExhaustion determines what the handler returns from
+`execute()` on retry exhaustion: fail-closed produces `ok: false`;
+fail-open produces `ok: true` with an audit-log entry recording that
+the network action did not complete. The per-handler or per-tier
+failurePolicy then governs how the SDK reacts to that result per the
+Precedence subsection above.
+
 ### Failure-Mode Interactions
 
 Several failure modes interact; the SDK `MUST` resolve interactions as
@@ -775,14 +833,15 @@ adversary `MAY` be able to reach it).
 
 Mitigations a deployment `SHOULD` consider:
 
-- **Plausible deniability of the key's existence.** The `Manifest`'s
-  wipeProtocol.tier value is itself a hashed selector across the four
-  possible tiers, structured so that an inspector who reads the
-  on-device `Manifest` cannot tell whether the deployment is configured
-  for `Medium` or `Recoverable-Lock`. The fact of recovery's existence is
-  not visible from the device alone; the adversary `MUST` either know the
-  spec well enough to demand the key on speculation or have other
-  evidence the deployment uses recovery.
+- **Plausible deniability of the recovery key's existence (v0.2
+  deferral).** v0.2 will specify a hashed-selector encoding of
+  wipeProtocol.tier so that an inspector who reads the on-device
+  `Manifest` cannot distinguish `Medium` from `Recoverable-Lock`. v0.1
+  deployments using `Recoverable-Lock` `SHOULD` assume tier choice may
+  be visible from the on-device `Manifest` and `MUST-NOT` rely on
+  tier-choice deniability as a primary mitigation. Until v0.2 ships, an
+  adversary who reads the on-device `Manifest` `MAY` learn that the
+  deployment uses `Recoverable-Lock` and demand the key on that basis.
 - **Trusted-contact storage with a signal-of-life check.** A trusted
   contact `MAY` refuse to release the key unless the user contacts them
   voluntarily within N days, with a verification protocol the contact
