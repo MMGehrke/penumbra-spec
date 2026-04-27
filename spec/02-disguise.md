@@ -65,6 +65,17 @@ interface Disguise {
   // listeners, timers, audio sessions, sensor subscriptions, in-memory
   // accumulated input, transient render state — before returning.
   unmount(): void;
+
+  // Called by the SDK on every state-machine transition out of
+  // Authenticating (Unlock / Duress / Reject / Recover). The Disguise
+  // MUST clear any accumulated input state it holds for multi-event
+  // aggregation methods (e.g., knock-pattern's tap-timestamp buffer,
+  // gesture-pattern's path-tracing buffer). resetAccumulatedState()
+  // does NOT carry the AuthResult; the disguise still cannot observe
+  // which terminal outcome occurred. MUST NOT block, throw, or perform
+  // I/O. MUST be idempotent — the SDK MAY call it on transitions where
+  // no accumulated state exists.
+  resetAccumulatedState(): void;
 }
 
 interface DisguiseHost {
@@ -185,12 +196,16 @@ accumulated input state. This complements the host-side `AuthChallenge`
 reset rule in `01-authentication.md` (which clears `AuthChallenge`-internal
 state) by also clearing the disguise-side accumulator that fed it.
 
-The signal mechanism is implementation-defined for v0.1. The SDK `MAY` add
-an explicit `DisguiseHost.resetAccumulatedState()` callback in v0.2; for
-v0.1, the disguise `MUST` clear accumulated state when its next
-forwardInput call returns from `verify()` with any non-incremental result.
-This prevents stale partial credentials from one `Authenticating` cycle
-bleeding into the next.
+The signal mechanism is the `Disguise.resetAccumulatedState()` method
+defined in the `Disguise` Contract above. The SDK invokes it on every
+state-machine transition out of `Authenticating`, regardless of which
+terminal `AuthResult` produced the transition. The method itself does
+not carry the `AuthResult` — preserving the one-way input channel — so
+the disguise still cannot distinguish `Unlock` from `Duress` from
+`Reject` from `Recover`. The signal is the bare fact that an
+`Authenticating` cycle ended; the `Disguise` clears its accumulators
+without knowing why. This prevents stale partial credentials from one
+`Authenticating` cycle bleeding into the next.
 
 ### Mount Failure
 
