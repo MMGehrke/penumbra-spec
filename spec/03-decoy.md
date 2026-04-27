@@ -53,11 +53,14 @@ interface Decoy {
   // imitated-app's title strings, not this field.
   readonly displayName: string;
 
-  // The minimum credibility tier this Decoy implementation claims to
-  // satisfy. The SDK validates at Manifest load that this value is
-  // greater than or equal to the Manifest's configured
-  // decoy.credibilityTier; if it is not, the Manifest MUST fail
-  // validation.
+  // The maximum credibility tier this Decoy implementation can faithfully
+  // render. Acts as the upper bound of the bundle-tier lattice: the SDK
+  // validates at Manifest load that this value is greater than or equal
+  // to the Manifest's configured decoy.credibilityTier (lower bound); if
+  // it is not, the Manifest MUST fail validation. DecoyContent.tier MUST
+  // also be ≤ this value — an implementation cannot faithfully render a
+  // bundle of richer tier than itself. See Tier Conformance and
+  // Content-Bundle Protocol below.
   readonly credibilityTier: "Glance" | "Inspection" | "Sustained";
 
   // Mounted by the SDK on the Wiping → Decoyed transition, per the
@@ -89,10 +92,10 @@ interface DecoyContent {
   // mounting Decoy's id, or Manifest validation MUST fail.
   decoyId: string;
 
-  // The bundle's claimed credibility tier. The SDK validates that this
-  // value is greater than or equal to the Manifest's configured
-  // decoy.credibilityTier; if it is not, the Manifest MUST fail
-  // validation.
+  // The bundle's claimed credibility tier. Bundle tier MUST satisfy
+  // manifest_tier ≤ bundle_tier ≤ implementation_tier; both bounds are
+  // validated by the SDK at bundle load. See Content-Bundle Protocol
+  // below.
   tier: "Glance" | "Inspection" | "Sustained";
 
   // Decoy-specific data validated by the per-decoy $ref schema
@@ -245,6 +248,53 @@ synced" timestamp, a refresh button that simulates a 200–600 ms loading
 spinner and then displays the bundled content unchanged) is permitted
 as a fingerprint requirement, exactly as on the weather disguise.
 
+### Platform-Integration Surface
+
+The `Decoy` `MUST` correctly handle cross-cutting platform integrations
+that an inspector might trigger or observe during the `Decoyed` state.
+The same rules apply to the `Disguise` (see `02-disguise.md`); they are
+restated here because failure during `Decoyed` is strictly more
+dangerous than failure during `Disguised` — by the time the `Decoy` is
+on screen, a `DuressEvent` has already fired and any fingerprint is a
+hard reveal that the wipe just happened.
+
+- **Accessibility (VoiceOver / TalkBack).** Every accessibility label,
+  hint, role, and value rendered by the `Decoy` `MUST` match what the
+  imitated app would expose. The decoy `MUST-NOT` expose framework
+  identifiers (e.g., the React Native component tree, the Flutter widget
+  type names, the bundle identifier) through accessibility APIs. An
+  inspector who enables a screen reader and hears "Tourist Info bundle
+  v1, museum list, item one of seven" has fingerprinted the spec.
+- **Orientation.** The `Decoy` `MUST` rotate (or refuse to rotate) as
+  the imitated app does. A weather app that locks to portrait `MUST`
+  lock; a notes app that supports landscape `MUST` support landscape.
+  Rotating into a layout the decoy doesn't render is a fingerprint.
+- **Inbound notifications and banners.** During `Decoyed`, the host
+  application `MUST` suppress its own notification banners and inline
+  notification UI. Notifications from other apps that surface as system
+  banners are not the decoy's responsibility; the decoy `MUST-NOT`
+  decorate them.
+- **Status bar and system chrome.** The `Decoy` `MUST` render its
+  status-bar style, navigation-bar appearance, and system-chrome
+  treatment to match the imitated app. A calculator-style decoy
+  rendered in a chat-app's chrome is a fingerprint.
+- **Share sheets, picker dialogs, system menus.** Any system-UI surface
+  the decoy invokes (e.g., a "Share" affordance on a mock-document
+  detail view) `MUST` present the system-default chrome of the imitated
+  app's category, NOT the framework's default. The decoy `SHOULD` avoid
+  invoking these surfaces in v0.1 because correct fidelity across all
+  invocation paths is hard to verify; v0.2 may add per-platform
+  conformance vectors.
+- **Lock-screen widgets and background tasks.** The `Decoy` does not
+  run when the application is not foregrounded; widgets and background
+  tasks are out of scope for the `Decoy` itself. The host application,
+  however, `MUST` suppress its own lock-screen widget and background
+  task scheduling once `Wiping` has completed (this is a host-side
+  responsibility tracked in `04-wipe-protocol.md`'s Hard tier
+  remote-revocation rules).
+
+These rules apply equally to custom decoys; see Custom Decoys below.
+
 ## Hard Rules
 
 The following rules are normative for every `Decoy` at every credibility
@@ -369,12 +419,16 @@ A `Sustained`-tier `Decoy` `MUST` provide:
   sub-screens — to defeat the "linear list of detail pages" pattern an
   inspector recognizes after a minute.
 - Persistent-feeling in-session state beyond the `Inspection` tier's
-  "recently viewed" minimum: a session-search history that surfaces
-  prior queries when the user reopens the search affordance; recently-
-  edited items that re-sort to the top of their lists; a "drafts" or
-  "favorites" bin that feels like it accumulated over multiple uses.
-  All such state `MUST` be in-memory only, per the Lifecycle Across
-  States subsection above.
+  "recently viewed" minimum — the decoy `MUST` accumulate observable
+  state across user navigation that feels like it has been used before.
+  Examples (illustrative, not exhaustive): a session-search history
+  that surfaces prior queries when the user reopens the search
+  affordance; recently-edited items that re-sort to the top of their
+  lists; a "drafts" or "favorites" bin that feels like it accumulated
+  over multiple uses. The normative requirement is the property —
+  observable persistence within the `Decoyed` session — not any
+  specific pattern. All such state `MUST` be in-memory only, per the
+  Lifecycle Across States subsection above.
 - Plausible content authored to read as "user-typed" (notes, custom
   labels, free-form descriptions). Specifically, the bundle's
   free-form text `MUST-NOT` contain any of the following obvious-filler
@@ -487,8 +541,8 @@ explicit conformance-manifest documentation.
 Bundles `MAY` ship by any of the following routes:
 
 - Inside the SDK package (the SDK ships a default bundle for each
-  shipped `Decoy` implementation, for use as the safety fallback or as
-  a deployment's primary bundle in single-locale builds).
+  shipped `Decoy` implementation, for use as a deployment's primary
+  content bundle in single-locale builds).
 - Alongside the host app at install time (the embedding application
   bundles its own authored content into the app binary; this is the
   recommended path for non-default decoys).
@@ -523,12 +577,33 @@ The SDK ships a hardcoded minimal `Glance`-tier decoy whose sole purpose
 is to serve as the safety fallback when the configured bundle fails to
 load or the configured `Decoy`'s mount() throws. The fallback is
 implemented inside the SDK rather than as a separate bundle so it
-cannot itself fail bundle validation. Its content `MUST` be a single
-screen of plausible-but-bland material that satisfies the Hard Rules
-above without leaning on any deployment-specific data; the SDK ships
-the same fallback content across all five disguise types so an inspector
-who reaches the fallback path cannot infer which `Disguise` was
-configured.
+cannot itself fail bundle validation. The SDK-baked safety fallback is
+distinct from the per-decoy primary content bundles described in the
+Bundle Distribution section above; the safety fallback is a hardcoded
+component, while per-decoy primary bundles are JSON artifacts subject
+to bundle validation.
+
+For v0.1, the SDK-baked safety fallback `MUST` render a single static
+screen showing the current device wall-clock time (date and
+time-of-day) in the device's locale-default format, against a solid
+neutral-color background, with no other interactive elements, no
+images, and no text strings beyond the rendered timestamp. This
+minimal-but-plausible content is chosen because (a) it is content-free
+in the sense that no deployment-specific data is needed, (b) it is
+universally plausible across all imitated app categories (every real
+app on the device might briefly show a clock-like loading screen), and
+(c) two independent ports rendering it produce equivalent observable
+behavior. v0.2 will publish a richer normative content specification at
+`conformance/test-vectors/03-decoy/safety-fallback-content.json`; v0.1
+ports `MAY` choose richer content provided they document it in the
+conformance manifest, but `SHOULD` converge on the v0.2 vector when
+published.
+
+The SDK ships the same fallback content across all configured decoy
+implementations so an inspector who reaches the fallback path on
+multiple devices or deployments cannot distinguish them by fallback
+content. Deployments that configured different `Decoy` implementations
+produce identical fallback rendering.
 
 The fallback path's existence does not relax the configured tier's
 requirements: a deployment that configures `Sustained` and lands on the
@@ -623,8 +698,8 @@ section's authoring guidance below; a `Sustained`-tier
 `decoy-tourist-info` is something a deployment authors for itself
 against the deployment's specific cover story, not something the
 spec ships. v0.2 may add a generic decoy-notes or decoy-journal
-implementation tailored to the `Sustained` tier; that decision is
-recorded as future work in `09-threat-model.md` and the v0.2 roadmap.
+implementation tailored to the `Sustained` tier; the decision and
+prerequisites are deferred to the v0.2 planning cycle.
 
 ### Authoring Guidance for `Sustained` Bundles
 
@@ -697,7 +772,7 @@ just `decoy-tourist-info`). Deployments `SHOULD` namespace their decoy
 ids (e.g., `acme-corp/notes-style-decoy`) to avoid future collisions as
 the SDK adds more shipped decoys.
 
-Apps that fail any of the above `MUST-NOT` claim conformance. The SDK
+Apps that fail any of the above `MUST-NOT-CLAIM` conformance. The SDK
 refuses to mount a `Decoy` whose id is not registered (either as an
 SDK-shipped id or as a deployment-registered custom id) and falls back
 to the safety-fallback decoy per the Safety-Fallback Decoy subsection.
