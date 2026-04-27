@@ -146,6 +146,52 @@ Disguises `MUST-NOT` rely on persistent in-process state surviving the
 `Active → Disguised` transition; the prior instance was unmounted on the
 forward `Disguised → Active` transition.
 
+#### Recovering
+
+When `verify()` returns `Recover` and the state machine transitions to
+`Recovering`, the `Disguise` `MUST` remain mounted: per `00-architecture.md`,
+the implementation prompts for a `RecoveryKey` using a UI consistent with
+the `Disguise`. This mirrors the `Authenticating → Wiping` transition in
+that the SDK `MUST-NOT` unmount during `Authenticating → Recovering`. The
+`Disguise` is the prompt surface for `RecoveryKey` entry: the user-visible
+input affordance is the disguise's normal one (e.g., a calculator's display
+and buttons accept the recovery passphrase the same way they accept PIN
+sequences; a notes title field accepts the recovery passphrase the same way
+it accepts a knock rhythm's keystrokes-vs-taps disambiguation).
+
+During `Recovering`, the `Disguise`'s forwardInput calls are routed by the
+SDK to the configured `recovery-passphrase` `AuthChallenge`, NOT to the
+unlock or duress challenges. The disguise itself has no way to observe this
+routing change (the one-way channel forbids it) and continues to render
+normally.
+
+When the `Recovering → Disguised` transition fires (recovery key rejected,
+rate-limited per `00-architecture.md`), the `Disguise` remains mounted; the
+SDK does not remount. Reset semantics match `Authenticating → Disguised`:
+no remount, accumulated state cleared per the `AuthChallenge.reset()`
+coordination paragraph below. When the `Recovering → Active` transition
+fires (recovery key validated), the SDK unmounts the `Disguise` and renders
+the real application UI, analogous to `Authenticating → Active`.
+
+#### Coordination with `AuthChallenge.reset()`
+
+The `Disguise` `MAY` accumulate transient input state for methods that
+aggregate multiple events (notably `knock-pattern`'s tap-rhythm
+aggregation; the `gesture-pattern` grid's path-tracing buffer). On every
+state-machine transition out of `Authenticating` — whether to `Active`
+(`Unlock`), `Wiping` (`Duress`), `Disguised` (`Reject`), or `Recovering`
+(`Recover`) — the `DisguiseHost` `MUST` signal the disguise to clear any
+accumulated input state. This complements the host-side `AuthChallenge`
+reset rule in `01-authentication.md` (which clears `AuthChallenge`-internal
+state) by also clearing the disguise-side accumulator that fed it.
+
+The signal mechanism is implementation-defined for v0.1. The SDK `MAY` add
+an explicit `DisguiseHost.resetAccumulatedState()` callback in v0.2; for
+v0.1, the disguise `MUST` clear accumulated state when its next
+forwardInput call returns from `verify()` with any non-incremental result.
+This prevents stale partial credentials from one `Authenticating` cycle
+bleeding into the next.
+
 ### Mount Failure
 
 If the `Disguise`'s mount throws, returns abnormally, or fails to render its
@@ -161,9 +207,24 @@ disguise was configured by observing the failure mode.
 The fall-through `MUST` continue to accept user input and `MUST` still route
 input to the configured `AuthChallenge` — a user attempting to authenticate
 against a partially-failed disguise mount `MUST` still be able to enter their
-credential. The fall-through input affordance is a single transparent
-text-entry field positioned where the disguise's primary input would normally
-be, accepting the same `AuthInput.payload` shape as the configured disguise.
+credential. The fall-through input affordance is parameterized by the
+configured `AuthChallenge` payload type:
+
+- For `pin-sequence`, `math-result`, `recovery-passphrase` (string-based
+  payloads): a single transparent text-entry field accepting the
+  digit-or-character sequence.
+- For `knock-pattern` (rhythm-based): a transparent tappable region that
+  captures tap timestamps and forwards them as KnockPatternInput.
+- For `gesture-pattern` (path-based): a transparent 3x3 grid region
+  (visible only on touch-down, fading after release) that captures the
+  swipe path and forwards it as GesturePatternInput.
+- For `time-window-gate`, `location-gate`, `paired-device` (gate methods
+  that don't accept user-typed input): the fall-through is invisible; the
+  gates evaluate based on context alone.
+
+This per-payload parameterization preserves the property that the
+fall-through visual is itself a uniform "bare native screen" across
+disguises while still being able to forward the configured payload type.
 
 ### Concurrent Input
 
@@ -179,6 +240,16 @@ buffers a multi-touch sequence into a single forwardInput call is a
 conformance violation, because it would let an attacker inject a longer
 credential than the genuine app's single-touch input could ever produce.
 
+Equivalent property on the SDK boundary (which is testable by black-box
+conformance vectors): for every distinct user touch event the disguise
+observes, exactly one `verify()` call against the configured `AuthChallenge`
+`MUST` execute, in temporal order. Two distinct touch events that arrive
+within the same render frame `MUST` produce two `verify()` calls, not one.
+Conformance test vectors at
+`conformance/test-vectors/02-disguise/concurrent-input.json` (v0.2) will
+exercise this rule by replaying multi-touch event streams and asserting
+per-event `verify()` invocations.
+
 ### Localization
 
 Genuine apps ship in many languages and follow the device's primary locale.
@@ -189,6 +260,17 @@ at least the device's primary language for every shipped registry entry; an
 implementation that ships only an English-language disguise is a conformance
 violation when deployed on a device whose primary locale is non-English. The
 shipped registry entries below note locale support per disguise.
+
+When a `Disguise` implementation's localized-catalog does not cover the
+device's primary locale, the implementation `MUST` fall back to the
+localization that the genuine app's platform-native equivalent uses on the
+same device. For example, if the device's primary locale is Latvian and the
+genuine iOS Calculator does not ship a Latvian localization (and falls back
+to English), then calculator-ios `MAY` ship English chrome on a Latvian
+device — because that matches the genuine app's behavior. An implementation
+that ships a Latvian localization when the genuine app does not is itself a
+fingerprint and is non-conformant. Implementations `MUST` document their
+localization-coverage matrix in their conformance manifest.
 
 For the `AuthChallenge` payload itself (digits, gesture-grid indices, knock
 intervals, etc.), the input is locale-agnostic by construction: a calculator
@@ -217,9 +299,14 @@ The required behaviors below are normative.
   "Error" and the user has to clear; Android Calculator displays the literal
   string "Cannot divide by zero". A generic "error" string, an exception
   trace, or a development-mode red-box is a conformance violation. The
-  Galois reference's calculator (`components/StealthLayout.js#calculate`)
-  already returns 0 on divide-by-zero, matching iOS Calculator behavior;
-  ports targeting Android `MUST` adjust the visible string accordingly.
+  Galois reference (`components/StealthLayout.js#calculate`) currently
+  returns numeric 0 on divide-by-zero, which is non-conformant against this
+  rule for calculator-ios. A conformant calculator-ios `MUST` display the
+  literal string "Error" on the calculator display, matching iOS
+  Calculator's UI behavior. v0.2 conformance vectors will detect the Galois
+  implementation as non-conformant on this case. Ports targeting Android
+  `MUST` adjust the visible string to the localized "Cannot divide by zero"
+  form accordingly.
 
 - **Malformed input.** All input handlers `MUST` handle malformed input by
   silently ignoring it. No error dialog, no toast, no log spew, no
@@ -304,8 +391,8 @@ defend against every channel that applies to its target platform.
   user-visible affordance of network capability (the iCloud-sync icon, a
   weather-app loading spinner) is permitted as a fingerprint requirement
   — the disguise `MAY` look like an app that has network features — but
-  during the `Disguised` state, no actual traffic `MUST` originate from
-  the disguise. Network code linked into the disguise binary is permitted
+  during the `Disguised` state, the disguise `MUST-NOT` originate any
+  actual wire traffic. Network code linked into the disguise binary is permitted
   insofar as the imitated app's binary would also link such code; what
   the rule forbids is wire traffic generated during user-visible
   `Disguised`-state operation.
@@ -333,6 +420,21 @@ Each entry below specifies: the registry ID and human-readable display name;
 the visual-fidelity rules every port `MUST` honor; the input mapping that
 defines how user actions translate into `AuthInput.payload`; and platform
 notes covering OS-specific corner cases.
+
+**Note on registry asymmetry.** The registry ships two platform-specific
+calculator variants (calculator-ios, calculator-android) but only one of
+each non-calculator disguise (notes, weather, unit-converter). This is
+intentional for v0.1: the calculator app is the lowest-fidelity disguise
+that can plausibly justify any input shape, and platform-canonical visual
+fidelity is achievable. For non-calculator disguises, the v0.1
+implementations imitate a *genre* rather than a specific platform-canonical
+product. A disguise claiming to be the iOS system Notes app would need to
+match a much more specific visual contract than v0.1 specifies, and an
+inspector who knows the device is iOS could potentially detect the
+mismatch. Deployments where this matters `SHOULD` ship a calculator
+disguise as the primary; v0.2 will add platform-specific variants of the
+genre disguises (notes-ios, notes-android, etc.) once the per-platform
+conformance vectors are authored.
 
 ### calculator-ios
 
@@ -472,7 +574,13 @@ delivered via one of two methods, configured in the `Manifest`:
   the tap; the configured `AuthChallenge` is the `knock-pattern` method
   per `01-authentication.md`. The disguise considers the rhythm complete
   when a configurable inter-tap pause has elapsed since the last tap
-  (default 1500 ms) and forwards the final input with `complete = true`.
+  (default 1500 ms) and forwards a final KnockPatternInput with
+  complete = true. On this synthesized terminal call, the input's tapAt
+  field `MUST` be set to the tapAt of the most recent real tap, NOT to
+  the wall-clock at the moment the inter-tap-pause timeout fired. This
+  ensures two ports computing the inter-tap-interval list from the
+  sequence of tapAt values arrive at the same observed-interval list,
+  regardless of when each port's timeout actually fired.
   The title field `MUST` accept ordinary typing while taps accumulate;
   only inputs that match the tap-rhythm shape (short stand-alone taps
   with no intervening keystrokes) `MUST` be forwarded as KnockPatternInput.
@@ -480,16 +588,25 @@ delivered via one of two methods, configured in the `Manifest`:
   ordinary text input to the title field and `MUST-NOT` be forwarded to
   any `AuthChallenge`.
 
-- **`gesture-pattern`** (alternative): the user performs a long-press on
-  the title field, which surfaces a hidden 3x3 grid overlaid on the title
-  area. The grid disappears as soon as the long-press is released. The
-  user traces a connected path through the grid; the path is forwarded as
-  a GesturePatternInput payload (defined in `01-authentication.md`'s
-  gesture-pattern method). The grid is invisible to a casual observer
-  because it surfaces only during the long-press and disappears the
-  instant the finger lifts; an inspector tapping randomly will not surface
-  the grid because the grid requires a sustained long-press above the
-  platform-native long-press threshold.
+- **`gesture-pattern`** (alternative): the user performs a sustained
+  long-press on the title field, which surfaces a hidden 3x3 grid overlaid
+  on the title area. On platforms where long-press on a text field
+  surfaces a platform-native context menu (iOS context menu with
+  cut/copy/paste; Android floating action toolbar), the disguise `MUST`
+  allow the platform-native menu to surface as expected. The hidden 3x3
+  grid surfaces only after a sustained long-press of at least 1500 ms
+  (well above the platform-native long-press threshold of ~500 ms on both
+  iOS and Android), and only if the user holds without releasing through
+  the native menu's appearance. Implementations `MUST-NOT` displace or
+  suppress the platform-native context menu — doing so is a conformance
+  violation. Path-tracing input through the grid forwards as
+  GesturePatternInput.path (defined in `01-authentication.md`'s
+  gesture-pattern method); the path completes (complete = true) on
+  finger-lift, which is also when the grid disappears. The grid is
+  invisible to a casual observer because it surfaces only after the
+  sustained-long-press threshold and disappears the instant the finger
+  lifts; an inspector tapping randomly or short-pressing will not surface
+  the grid.
 
 A given `Manifest` configures exactly one of these two methods on the notes
 disguise; configuring both is a conformance violation because the two input
