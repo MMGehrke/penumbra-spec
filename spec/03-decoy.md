@@ -433,14 +433,20 @@ A bundle has the following normative fields, validated by the schema:
   validates that this equals the mounting `Decoy`'s id; mismatches
   `MUST` fail bundle validation.
 - tier — one of `Glance`, `Inspection`, or `Sustained`. The SDK
-  validates that this is greater than or equal to the `Manifest`'s
-  configured decoy.credibilityTier; lower values `MUST` fail bundle
-  validation. The bundle's tier `MUST` also be less than or equal to
-  the `Decoy` implementation's declared credibilityTier only in the
-  sense that the implementation `MUST` be capable of rendering the
-  claimed tier; an implementation that declares `Inspection` cannot
-  faithfully render a `Sustained`-tier bundle's richer content
-  graph and `MUST` reject the load.
+  validates two constraints against this field, using the lattice
+  `Glance` < `Inspection` < `Sustained`:
+  - **Lower bound (manifest floor).** The bundle's tier `MUST` be
+    greater than or equal to the `Manifest`'s configured
+    decoy.credibilityTier. A bundle below the manifest floor `MUST`
+    fail validation.
+  - **Upper bound (implementation ceiling).** The bundle's tier `MUST`
+    be less than or equal to the `Decoy` implementation's declared
+    credibilityTier. An implementation that declares `Inspection`
+    cannot faithfully render a `Sustained`-tier bundle's richer content
+    graph (more sub-screens, persistent in-session state) and `MUST`
+    reject the load.
+
+  Combined: manifest_tier ≤ bundle_tier ≤ implementation_tier.
 - payload — decoy-specific data validated by the per-decoy $ref
   schema referenced from `decoy-content.schema.json`. The shape is
   determined by decoyId.
@@ -463,14 +469,18 @@ Bundles `SHOULD` localize like `Disguise` content does in
 device's primary locale is available, the SDK `MUST` load it; when it
 is not, the SDK `MUST` fall back to the localization the genuine app's
 platform-native equivalent uses on the same device. For the
-`decoy-tourist-info` reference implementation (Galois's Existing Decoy
-section below), the platform-native fallback is the en-US bundle that
-ships with the SDK as the safety fallback. Bundles whose meta.locale
-is non-equal to the device locale and whose content visibly contradicts
-the device's chrome (e.g., a Japanese-locale device showing English
-museum names) are an immediate fingerprint and `MUST-NOT` ship in a
-production deployment without explicit conformance-manifest
-documentation.
+`decoy-tourist-info` reference implementation, the SDK ships an en-US
+bundle that serves as the per-decoy locale fallback (used when a
+deployment-authored bundle for the device locale is not available). The
+per-decoy locale fallback is distinct from the cross-decoy
+*safety-fallback decoy* (Safety-Fallback Decoy subsection below):
+the safety fallback is invoked when bundle loading itself fails (corrupt
+file, schema mismatch, unreachable URI), not when locale coverage is
+incomplete. Bundles whose meta.locale is non-equal to the device locale
+and whose content visibly contradicts the device's chrome (e.g., a
+Japanese-locale device showing English museum names) are an immediate
+fingerprint and `MUST-NOT` ship in a production deployment without
+explicit conformance-manifest documentation.
 
 ### Bundle Distribution
 
@@ -642,3 +652,52 @@ implementation, the following rules `MUST` be honored:
   "Decoy content quality is human-graded" caveat, automated tests
   cannot verify plausibility; the deployment owns this review and
   `MUST` document it in the conformance manifest.
+
+## Custom Decoys
+
+Unlike the `Disguise` registry, which is closed in v0.1 (every conformant
+deployment uses one of the five entries in `02-disguise.md`'s Shipped
+Registry), the `Decoy` registry is **open**: deployments `MAY` ship their
+own `Decoy` implementations under deployment-authored decoy ids. The
+asymmetry is principled — `Disguise` ships against OS-level fingerprint
+domains where each entry encodes platform-specific behavior the SDK has to
+know about, while `Decoy` renders bundled content and never touches
+platform internals. Forcing deployments to upstream every decoy
+implementation into an SDK registry would create needless friction for
+what is essentially "a component that reads a JSON bundle."
+
+A custom `Decoy` `MUST` satisfy every requirement that applies to the
+SDK-shipped `decoy-tourist-info`:
+
+- Implement the `Decoy` contract exactly (every interface member;
+  the resetAccumulatedState() method from `02-disguise.md` is N/A
+  for `Decoy` because Decoys do not accumulate input state — they
+  have no forwardInput-equivalent).
+- Pass the per-platform crash-resistance conformance suite at
+  `conformance/test-vectors/03-decoy/crash-resistance.json` (v0.2).
+- Satisfy every Hard Rule (no network during `Decoyed`, no real-user-
+  data references, no framework error overlays, mounting only from
+  `Wiping`, etc.).
+- Declare its credibilityTier honestly. A custom `Decoy` that
+  declares `Sustained` `MUST-NOT-CLAIM` conformance unless its content
+  graph satisfies every `Sustained` requirement in the Credibility
+  Tiers section.
+- Document its bundle schema. Because `decoy-content.schema.json` uses
+  per-decoy $refs for the payload field, a custom decoy id
+  contributes its own sub-schema. The deployment `MUST` publish this
+  sub-schema and `MUST` reference it from `decoy-content.schema.json`
+  (in v0.2 this is enforced by schema validation; in v0.1 it is a
+  documentation requirement).
+- Pass the fingerprint-avoidance checklist (manual review item; the
+  published checklist lives in `02-disguise.md`'s Fingerprint Avoidance
+  section and applies to `Decoy` implementations equally).
+
+A custom decoy id `MUST` not collide with any SDK-shipped id (currently
+just `decoy-tourist-info`). Deployments `SHOULD` namespace their decoy
+ids (e.g., `acme-corp/notes-style-decoy`) to avoid future collisions as
+the SDK adds more shipped decoys.
+
+Apps that fail any of the above `MUST-NOT` claim conformance. The SDK
+refuses to mount a `Decoy` whose id is not registered (either as an
+SDK-shipped id or as a deployment-registered custom id) and falls back
+to the safety-fallback decoy per the Safety-Fallback Decoy subsection.
