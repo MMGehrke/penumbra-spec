@@ -291,18 +291,36 @@ The selection determines which sets of registered handlers execute on
 `DuressEvent`, with the tier-cascade rule defined in Wipe Tiers above:
 `Soft` runs by itself; `Medium` runs all `Soft` then all `Medium`; `Hard`
 runs all `Soft` then all `Medium` then all `Hard`. `Recoverable-Lock` runs
-all `Soft` then all `Recoverable-Lock`; it is mutually exclusive with
-`Medium` and `Hard` for the same registered resources.
+all `Soft` then all `Recoverable-Lock`. Recoverable-Lock is mutually
+exclusive with `Medium` and `Hard` *per resource*: a `Manifest` that
+registers the same resource under both a destroying tier and
+`Recoverable-Lock` `MUST` fail validation.
+
+A deployment `MAY` register *different* resources under different tiers,
+producing a mixed-tier deployment (e.g., authentication tokens registered
+under `Medium`, document corpus registered under `Recoverable-Lock`). When a
+mixed-tier deployment is configured, the cascade `MUST` execute in this
+strict order: all `Soft` handlers, then all `Medium` handlers, then all
+`Hard` handlers, then all `Recoverable-Lock` handlers. Destroying tiers
+always run before the encrypting tier so an interrupted wipe completes its
+irreversible destruction work before doing reversible encryption work; an
+interruption mid-`Recoverable-Lock` leaves not-yet-encrypted resources
+plaintext but those resources are bounded to the `Recoverable-Lock` set,
+not the destroying set.
 
 ### Invocation Order
 
 On `DuressEvent`, the SDK invokes handlers in **strict tier order**: all
 `Soft` handlers complete before any `Medium` handler runs; all `Medium`
-handlers complete before any `Hard` handler runs. Within a single tier,
-invocation order is registration order. `Recoverable-Lock` handlers are
-invoked instead of `Hard` handlers when the active tier is
-`Recoverable-Lock`; per the mutual-exclusion rule, the same registered
-resource is never targeted by both tier families.
+handlers complete before any `Hard` handler runs; all `Hard` handlers
+complete before any `Recoverable-Lock` handler runs. Within a single
+tier, invocation order is registration order. The full cascade order is
+`Soft → Medium → Hard → Recoverable-Lock`; a homogeneous deployment
+selects the prefix of this order that matches its declared tier set, and
+a mixed-tier deployment runs the full applicable prefix. Per the
+mutual-exclusion rule, the same registered resource is never targeted by
+both `Hard` and `Recoverable-Lock`, nor by both `Medium` and
+`Recoverable-Lock`.
 
 Handlers within a tier `MAY` run sequentially or in parallel at the SDK's
 discretion, provided that the tier-completion guarantee holds: the SDK
@@ -626,7 +644,7 @@ default. The behaviors below are normative.
 | Single handler throws | fail-open: log to audit, continue with remaining handlers in this tier and subsequent tiers | Yes | per-handler failurePolicy in the `Manifest` |
 | All handlers in a tier throw | fail-open: log, proceed to the next tier | Yes | per-tier failurePolicy in the `Manifest` |
 | Battery dies during `Wiping` | resume from encrypted progress flag at next launch; complete remaining handlers; THEN transition to `Decoyed` | No (security-critical) | — |
-| Network unreachable during `Hard` panic webhook | per-handler networkPolicy: retry with exponential backoff (default 3 attempts), or fail-open after exhaustion | Yes | per-handler networkPolicy |
+| Network unreachable during `Hard` panic webhook | per-handler networkPolicy: retry with exponential backoff (default 3 attempts at 1000 / 2000 / 4000 ms), or fail-open after exhaustion | Yes | per-handler networkPolicy |
 | `RecoveryKey` provider unreachable during `Recoverable-Lock` | fall back per wipeProtocol.recoveryUnreachablePolicy: degrade-to-medium (default) or fail-closed | Yes | wipeProtocol.recoveryUnreachablePolicy |
 | Wipe exceeds maxDurationMs | abort remaining handlers; record incomplete state in the encrypted progress flag; transition to `Decoyed` | Yes (the budget) | wipeProtocol.maxDurationMs |
 | Concurrent `DuressEvent` re-trigger during `Wiping` | ignore the second event; continue the first | No (idempotence-driven) | — |
@@ -679,6 +697,37 @@ Per-handler overrides per-tier; per-tier overrides the protocol default.
 Two ports that disagree on this precedence would diverge under realistic
 manifests, so the rule is fixed and `MUST` be applied uniformly across all
 ports.
+
+### Configurable Policy Shapes
+
+The configurable policy fields referenced above and in the Default
+Behaviors table take the following concrete shapes in the `Manifest`. The
+canonical schema is authored in `manifest.schema.json`; the shapes below
+are the normative semantic minimum that every conformant `Manifest` schema
+`MUST` accept.
+
+```text
+failurePolicy: "fail-open" | "fail-closed"
+
+networkPolicy: {
+  maxAttempts: integer (default 3, minimum 1, maximum 10),
+  baseDelayMs: integer (default 1000, minimum 100, maximum 60000),
+  multiplier: number   (default 2.0, minimum 1.0, maximum 10.0),
+  onExhaustion: "fail-open" | "fail-closed"  // default fail-open
+}
+
+wipeProtocol.recoveryUnreachablePolicy:
+  "degrade-to-medium" | "fail-closed"        // default degrade-to-medium
+
+wipeProtocol.maxDurationMs:
+  integer (default 30000, minimum 1000, maximum 300000)
+```
+
+A networkPolicy retry sequence with maxAttempts 3, baseDelayMs 1000, and
+multiplier 2.0 produces attempts at 0 ms (initial), 1000 ms, and 3000 ms
+cumulative wall-clock; the third attempt waits 2000 ms after the second.
+Implementations `MUST` apply jitter of ±20% to each delay to prevent
+thundering-herd retries against shared infrastructure.
 
 ### Failure-Mode Interactions
 
