@@ -7,6 +7,8 @@
     "validate": "ajv validate -s schemas/manifest.schema.json -d \"examples/*.json\" && ajv validate -s schemas/decoy-content.schema.json -d \"conformance/test-vectors/03-decoy/*.json\"",
     "lint": "markdownlint \"spec/**/*.md\" \"README.md\" \"CHANGELOG.md\"",
     "xref": "node tools/xref-lint.mjs",
+    "simulate": "node tools/simulate.mjs",
+    "conformance": "node tools/conformance.mjs",
     "ci": "npm run validate && npm run lint && npm run xref"
   },
   "devDependencies": {

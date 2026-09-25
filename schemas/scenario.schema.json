@@ -2,5 +2,76 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://penumbra-spec.example/schemas/scenario.schema.json",
   "title": "Penumbra executable profile scenario",
-  "type": "object"
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profileVersion", "name", "manifest", "events", "handlerOutcomes"],
+  "oneOf": [
+    { "required": ["expected"], "properties": { "expected": {} } },
+    { "required": ["expectedError"], "properties": { "expectedError": {} } }
+  ],
+  "properties": {
+    "profileVersion": { "const": "0.1" },
+    "name": { "$ref": "#/$defs/identifier" },
+    "manifest": {
+      "type": "string", "minLength": 6, "maxLength": 256,
+      "pattern": "^[A-Za-z0-9_./-]+\\.json$"
+    },
+    "events": {
+      "type": "array", "minItems": 1, "maxItems": 100,
+      "items": {
+        "oneOf": [
+          { "type": "object", "additionalProperties": false, "required": ["type"], "properties": { "type": { "const": "initialize" } } },
+          { "type": "object", "additionalProperties": false, "required": ["type", "shape"], "properties": { "type": { "const": "submit" }, "shape": { "const": "calculator-expression" } } },
+          { "type": "object", "additionalProperties": false, "required": ["type", "outcome"], "properties": { "type": { "const": "auth-result" }, "outcome": { "enum": ["Unlock", "Reject", "Duress"] } } },
+          { "type": "object", "additionalProperties": false, "required": ["type"], "properties": { "type": { "enum": ["lock", "restart"] } } }
+        ]
+      }
+    },
+    "handlerOutcomes": {
+      "type": "object", "maxProperties": 64,
+      "propertyNames": { "$ref": "#/$defs/identifier" },
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "object", "additionalProperties": false, "required": ["ok"], "properties": { "ok": { "const": true } } },
+          { "type": "object", "additionalProperties": false, "required": ["ok", "code"], "properties": { "ok": { "const": false }, "code": { "const": "simulated-failure" } } }
+        ]
+      }
+    },
+    "expected": {
+      "type": "object", "additionalProperties": false,
+      "required": ["finalState", "trace", "handlerResults"],
+      "properties": {
+        "finalState": { "$ref": "#/$defs/state" },
+        "trace": {
+          "type": "array", "maxItems": 200,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["from", "event", "to"],
+            "properties": {
+              "from": { "$ref": "#/$defs/state" },
+              "event": { "enum": ["initialize", "submit", "auth:Unlock", "auth:Reject", "auth:Duress", "wipe:complete", "wipe:failed", "lock", "restart"] },
+              "to": { "$ref": "#/$defs/state" }
+            }
+          }
+        },
+        "handlerResults": {
+          "type": "array", "maxItems": 64,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["handlerId", "policy", "outcome"],
+            "properties": {
+              "handlerId": { "$ref": "#/$defs/identifier" },
+              "policy": { "enum": ["fail-open", "fail-closed"] },
+              "outcome": { "enum": ["success", "failure"] }
+            }
+          }
+        }
+      }
+    },
+    "expectedError": { "type": "string", "minLength": 3, "maxLength": 64, "pattern": "^[A-Z][A-Z0-9_]*$" }
+  },
+  "$defs": {
+    "identifier": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "state": { "enum": ["Init", "Disguised", "Authenticating", "Active", "Wiping", "Decoyed"] }
+  }
 }

@@ -1,0 +1,20 @@
+{
+  "profileVersion": "0.1",
+  "name": "reject",
+  "manifest": "../../examples/manifests/coercion-calculator.json",
+  "events": [
+    { "type": "initialize" },
+    { "type": "submit", "shape": "calculator-expression" },
+    { "type": "auth-result", "outcome": "Reject" }
+  ],
+  "handlerOutcomes": {},
+  "expected": {
+    "finalState": "Disguised",
+    "trace": [
+      { "from": "Init", "event": "initialize", "to": "Disguised" },
+      { "from": "Disguised", "event": "submit", "to": "Authenticating" },
+      { "from": "Authenticating", "event": "auth:Reject", "to": "Disguised" }
+    ],
+    "handlerResults": []
+  }
+}

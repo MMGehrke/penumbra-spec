@@ -1,0 +1,20 @@
+{
+  "profileVersion": "0.1",
+  "name": "unlock",
+  "manifest": "../../examples/manifests/coercion-calculator.json",
+  "events": [
+    { "type": "initialize" },
+    { "type": "submit", "shape": "calculator-expression" },
+    { "type": "auth-result", "outcome": "Unlock" }
+  ],
+  "handlerOutcomes": {},
+  "expected": {
+    "finalState": "Active",
+    "trace": [
+      { "from": "Init", "event": "initialize", "to": "Disguised" },
+      { "from": "Disguised", "event": "submit", "to": "Authenticating" },
+      { "from": "Authenticating", "event": "auth:Unlock", "to": "Active" }
+    ],
+    "handlerResults": []
+  }
+}
