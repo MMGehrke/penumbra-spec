@@ -1,0 +1,10 @@
+{
+  "profileVersion": "0.1",
+  "name": "malformed-manifest",
+  "manifest": "../../test/fixtures/invalid/manifest-unknown-field.json",
+  "events": [
+    { "type": "initialize" }
+  ],
+  "handlerOutcomes": {},
+  "expectedError": "SCHEMA_INVALID"
+}
