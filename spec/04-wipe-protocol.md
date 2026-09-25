@@ -361,7 +361,11 @@ process kill, hardware failure) and resumed at the next launch.
 The SDK records progress in an encrypted persistent flag whose key is
 derived from device-bound material plus the loaded `Manifest` fingerprint.
 The flag records, for each tier, which handlers have confirmed successful
-completion. On the next launch after an interruption, the SDK detects the
+completion and which incomplete handlers have an applied fail-open decision.
+Incomplete fail-open work remains durably recorded for retry; a policy decision
+`MUST-NOT` be recorded as successful execution. Unresolved fail-closed work
+remains pending and blocks both `Decoyed` and `Active`.
+On the next launch after an interruption or deferred fail-open work, the SDK detects the
 flag during `Init` (per the Failure-Mode Transitions section of
 `00-architecture.md`), determines the earliest unfinished position in the
 cascade `Soft` → `Medium` → `Hard` → `Recoverable-Lock`, and resumes the
@@ -398,14 +402,18 @@ The encrypted progress flag's key derivation is normative for porting:
   The nonce is a fresh 12-byte random value per flag write. The
   associated-data field includes the spec version string. The plaintext
   payload encodes tier progress as JSON of the form
-  `{ "tier": "Soft" | "Medium" | "Hard" | "Recoverable-Lock", "completedHandlerIds": string[] }`.
+  `{ "tier": "Soft" | "Medium" | "Hard" | "Recoverable-Lock", "completedHandlerIds": string[], "failOpenHandlerIds": string[] }`.
+  The two handler lists `MUST` be disjoint. The second list records policy-approved
+  incomplete work, not completion; handlers in that list remain eligible for retry.
 
 When the SDK resumes a wipe, the user-visible disguise persists throughout
-the resumed run. The resumed wipe completes (or applies fail-open) before
-the state machine transitions to `Decoyed`. The SDK `MUST-NOT` transition
-to `Decoyed` while wipe handlers are still pending; doing so would let an
-adversary who relaunches a partially-wiped device observe the decoy on a
-device that still contains plaintext data — the worst of both worlds.
+the resumed run. Before entering `Decoyed`, every selected handler `MUST` either
+complete successfully or have an applied fail-open decision. Policy-approved
+fail-open work may remain incomplete and durably recorded for retry without
+blocking `Decoyed`; this accepts the incomplete-wipe risk described under
+fail-open. Unresolved fail-closed work `MUST-NOT` be skipped: the machine remains
+`Disguised`, and both `Decoyed` and `Active` remain blocked until that work
+completes. The same distinction applies to initial runs and duration expiry.
 
 ### Concurrent Re-Trigger
 
@@ -703,7 +711,7 @@ default. The behaviors below are normative.
 |---|---|---|---|
 | Single handler throws | fail-open: log to audit, continue with remaining handlers in this tier and subsequent tiers | Yes | per-handler failurePolicy in the `Manifest` |
 | All handlers in a tier throw | fail-open: log, proceed to the next tier | Yes | per-tier failurePolicy in the `Manifest` |
-| Battery dies during `Wiping` | resume from encrypted progress flag at next launch; complete remaining handlers; THEN transition to `Decoyed` | No (security-critical) | — |
+| Battery dies during `Wiping` | resume from encrypted progress flag at next launch; enter `Decoyed` only after remaining handlers complete or have applied fail-open decisions; unresolved fail-closed work blocks `Decoyed` and `Active` | No (resume required; handler policies still apply) | — |
 | Network unreachable during `Hard` panic webhook | per-handler networkPolicy: retry with exponential backoff (default 3 attempts at 1000 / 2000 / 4000 ms), or fail-open after exhaustion | Yes | per-handler networkPolicy |
 | `RecoveryKey` provider unreachable during `Recoverable-Lock` | fall back per wipeProtocol.recoveryUnreachablePolicy: degrade-to-medium (default) or fail-closed | Yes | wipeProtocol.recoveryUnreachablePolicy |
 | Wipe exceeds maxDurationMs | abort remaining handlers; record pending work; apply each handler's policy: fail-open may reach `Decoyed`, fail-closed stays `Disguised` and blocks `Active` | Yes (budget and handler policy) | wipeProtocol.maxDurationMs; failurePolicy |
@@ -733,7 +741,9 @@ Under `fail-closed`, a handler error halts the wipe chain immediately; the
 state machine transitions back to `Disguised` per the `Wiping → Disguised`
 transition in `00-architecture.md`, and the failed handler is retried at
 the next launch via the same resume semantics that handle battery
-exhaustion. The user-visible result of `fail-closed` is that the duress
+exhaustion. Until that work completes, it blocks both `Decoyed` and `Active`;
+retaining a fail-open retry record elsewhere does not relax this guard.
+The user-visible result of `fail-closed` is that the duress
 attempt appears to have produced a normal `Reject` (the user sees the
 disguise again, not the decoy).
 

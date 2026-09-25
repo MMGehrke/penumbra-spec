@@ -230,8 +230,10 @@ machine is in `Wiping`, the implementation `MUST` record a persistent encrypted
 flag indicating that a wipe was in progress. On the next launch, `Init` `MUST`
 detect this flag and resume the `WipeHandler` chain from the last unconfirmed
 handler before proceeding to `Disguised`. The wipe-resume protocol is defined in
-`04-wipe-protocol.md`. Until wipe completion is confirmed, the implementation
-`MUST-NOT` transition to `Active`.
+`04-wipe-protocol.md`. Until the remaining work completes or has applied
+fail-open decisions, the implementation `MUST-NOT` transition to `Active`.
+Unresolved fail-closed work blocks both `Decoyed` and `Active`; policy-approved
+fail-open work may remain recorded for retry without blocking those states.
 
 **Storage failure during `Wiping`.** If a `WipeHandler` encounters a storage
 error, the fail-open vs. fail-closed policy for that handler governs the outcome.

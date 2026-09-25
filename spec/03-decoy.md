@@ -40,8 +40,12 @@ A `Decoy` is the UI shown after a `DuressEvent` has been processed and
 enough that they hand the device back without further questioning. The
 `Decoy`'s defense is plausibility — the inspector concludes the app was a
 mundane app the user happened to be in — not concealment. By the time the
-`Decoy` is on screen, the wipe has already finished; the `Decoy` is the
-inspector-facing cover that explains why the device feels unremarkable.
+`Decoy` is on screen, the wipe chain has either completed successfully or
+applied fail-open to incomplete work per `04-wipe-protocol.md`. Such work may
+remain recorded for retry; unresolved fail-closed work blocks entry to
+`Decoyed`. References to wipe completion in this module mean that policy
+boundary, not a guarantee that every data operation succeeded. The `Decoy` is
+the inspector-facing cover that explains why the device feels unremarkable.
 
 The interface is expressed below in pseudo-code; ports `MUST` provide an
 idiomatic equivalent in their host language while preserving the semantics of
@@ -81,16 +85,14 @@ interface Decoy {
   // it has no input to forward (see Input Contract below).
   mount(bundle: DecoyContent): void;
 
-  // Called by the SDK when the decoy must be torn down. The only
-  // permitted teardown trigger is the application process being killed
-  // by the OS or the user (per 00-architecture.md, the Decoyed state
-  // persists until process death and the next launch starts at Init).
+  // Called by the SDK on explicit lock or orderly process teardown.
+  // These end the Decoyed session per 00-architecture.md. Abrupt process
+  // death also ends the session but cannot guarantee an unmount call.
   // unmount() MUST release every resource the decoy holds — listeners,
   // timers, in-memory transient state, render state — before returning.
   // The SDK MUST NOT call mount() a second time on the same Decoy
-  // instance: the Decoyed → Disguised transition happens only by
-  // process kill, after which the next launch instantiates a fresh
-  // Decoy if the duress path is reached again.
+  // instance. After explicit lock or process restart, reaching the
+  // duress path again requires a fresh Decoy and freshly loaded bundle.
   unmount(): void;
 }
 
@@ -167,21 +169,24 @@ state. A `Decoy` `MUST-NOT` be reachable from `Init`, `Disguised`,
 `Authenticating`, `Active`, or `Recovering`; ports that wire any other
 mount path are non-conformant.
 
-The `Decoyed` state persists until the application process is killed. Per
-`00-architecture.md`, the canonical `Decoyed → Disguised` transition is
-"app killed"; on the next launch, the state machine begins at `Init` and
-proceeds through `Init → Disguised` per the canonical sequence. The SDK
-`MUST-NOT` cache the previously-displayed `Decoy` content across process
-death; the previously-mounted `Decoy` instance is gone with the process,
-and if the duress path is reached again on a future launch the SDK
-mounts a fresh `Decoy` instance against a freshly-loaded
-`DecoyContent`. The `Decoy` `MUST-NOT` persist any state across process
-restarts (no shared preferences, no on-disk caches of "last viewed
-museum," no resumable session).
+The `Decoyed` state persists until explicit lock or process termination.
+Per `00-architecture.md`, explicit lock performs `Decoyed → Disguised` within
+the current process. A restart begins at `Init` and proceeds through
+`Init → Disguised`. Both boundaries end the decoy session. On explicit lock,
+the SDK `MUST` discard the mounted decoy instance and its session state;
+after process death the previous instance no longer exists. If the duress
+path is reached again, even within the same process, the SDK `MUST` mount
+a fresh `Decoy` instance against freshly-loaded, validated `DecoyContent`.
+The SDK `MUST-NOT` reuse the previously displayed bundle or transient session
+state across either boundary. The authored on-device bundle remains the input
+for a fresh load. The `Decoy` `MUST-NOT` persist session state across lock or
+restart (no shared preferences, on-disk "last viewed museum" cache, or
+resumable session).
 
-The `Decoy`'s unmount() is invoked only on process kill. The OS handles
-the kill itself; the `Decoy`'s responsibility on kill is to release any
-in-memory resources it holds and return from unmount(). The `Decoy`
+The SDK invokes unmount() on explicit lock and orderly process teardown.
+The `Decoy` `MUST` release its in-memory resources before unmount() returns.
+Abrupt OS termination may prevent that callback; correctness `MUST-NOT`
+depend on teardown running before process death. The `Decoy`
 `MUST-NOT` perform any I/O during unmount() (no log writes, no flush
 of session state, no telemetry) — the unmount path is a clean teardown,
 not a checkpoint.
@@ -202,11 +207,19 @@ be implemented at a layer below the host framework's default screen-
 transition surface, with the `Decoy`'s first frame painted in the same
 render tick that the `Disguise`'s last frame is replaced.
 
+On explicit lock from `Decoyed`, the SDK `MUST` unmount the `Decoy` and mount
+a fresh `Disguise` with empty accumulated input and no decoy session references.
+This reverse handoff follows the same visual-continuity requirement and
+`MUST-NOT` render `Active` UI, restore an authenticated session, or expose
+real user data. Pending fail-closed wipe work remains subject to module 00's
+`Active` guard. Only a subsequent valid authentication transition may reach
+`Active`; a subsequent duress path mounts a new decoy as described above.
+
 If the `Decoy`'s mount() throws, returns abnormally, or fails to render
 its UI within an implementation-defined timeout, the SDK `MUST` fall
 back to the safety-fallback decoy described in the Content-Bundle
-Protocol section below. That fallback is itself a `Glance`-tier
-hardcoded decoy bundled inside the SDK; mounting it `MUST` use the same
+Protocol section below. A future SDK implementing this draft `MUST` bundle
+that hardcoded `Glance`-tier decoy; mounting it `MUST` use the same
 visual-continuity contract above.
 
 ### Crash Resistance
@@ -581,11 +594,12 @@ post-recovery review can identify which bundle failed to load and why.
 
 ### Safety-Fallback Decoy
 
-The SDK ships a hardcoded minimal `Glance`-tier decoy whose sole purpose
-is to serve as the safety fallback when the configured bundle fails to
-load or the configured `Decoy`'s mount() throws. The fallback is
-implemented inside the SDK rather than as a separate bundle so it
-cannot itself fail bundle validation. The SDK-baked safety fallback is
+A future SDK implementing this draft `MUST` provide a hardcoded minimal
+`Glance`-tier decoy to serve as the safety fallback when the configured bundle
+fails to load or the configured `Decoy`'s mount() throws. No such component
+ships in this repository or its limited executable profile. The port `MUST`
+implement the fallback inside the SDK rather than as a separate bundle so it
+does not depend on bundle validation. The SDK-baked safety fallback is
 distinct from the per-decoy primary content bundles described in the
 Bundle Distribution section above; the safety fallback is a hardcoded
 component, while per-decoy primary bundles are JSON artifacts subject

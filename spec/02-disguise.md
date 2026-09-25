@@ -164,6 +164,11 @@ Disguises `MUST-NOT` rely on persistent in-process state surviving the
 `Active → Disguised` transition; the prior instance was unmounted on the
 forward `Disguised → Active` transition.
 
+Explicit lock from `Decoyed` also returns to `Disguised`. The SDK `MUST`
+unmount the decoy and mount a fresh `Disguise` with empty accumulated input,
+without restoring an authenticated session or revealing real user data.
+The reverse handoff and fresh-decoy rules are defined in `03-decoy.md`.
+
 #### Recovering
 
 When `verify()` returns `Recover` and the state machine transitions to
@@ -308,10 +313,11 @@ A genuine calculator does not crash. A genuine notes app does not crash. A
 `Disguise` `MUST-NOT` crash either, because a crash log, a system-level error
 dialog, or a framework-emitted red-box reveals immediately that the app is
 not a real instance of the app it claims to be. Crash resistance is the
-single most testable requirement in this module: every specified disguise has
-crash-resistance test vectors in `conformance/test-vectors/02-disguise/`, and
-a port that fails any of them `MUST-NOT-CLAIM` conformance for the affected
-disguise.
+single most testable requirement in this module. Crash-resistance vectors for
+every specified disguise are planned for v0.2 under
+`conformance/test-vectors/02-disguise/`; they are not present in this repository.
+Once published, a port that fails any applicable vector `MUST-NOT-CLAIM`
+conformance for the affected disguise.
 
 The required behaviors below are normative.
 
