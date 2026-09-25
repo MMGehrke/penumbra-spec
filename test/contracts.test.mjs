@@ -44,6 +44,19 @@ test("rejects paths outside the repository", () => {
   });
 });
 
+for (const [name, options] of [
+  ["null options", null],
+  ["non-string baseDir", { baseDir: 3 }],
+]) {
+  test(`rejects ${name} with a sanitized path error`, () => {
+    assert.throws(() => loadJsonFile(validManifestPath, options), {
+      name: "PenumbraError",
+      code: "PATH_INVALID",
+      message: "Artifact options are invalid.",
+    });
+  });
+}
+
 test("resolves sibling artifacts from a repository base directory", () => {
   const baseDir = fileURLToPath(new URL("../examples/decoy-content/", import.meta.url));
   const manifest = loadJsonFile("../manifests/coercion-calculator.json", { baseDir });
