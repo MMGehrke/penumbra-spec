@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { readdirSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadJsonFile, validateArtifact, validateDeployment } from "../lib/contracts.mjs";
+import { PenumbraError } from "../lib/errors.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const categories = [
@@ -23,16 +24,9 @@ function jsonFiles(root, directory) {
   return files.map((file) => join(root, directory, file));
 }
 
-function within(root, path) {
-  const difference = relative(root, path);
-  return difference === "" ||
-    (difference !== ".." && !difference.startsWith(`..${sep}`) && !difference.startsWith(sep));
-}
-
-function referencedJson(root, base, reference) {
+function referencedJson(base, reference) {
   const path = resolve(base, reference);
-  if (!within(root, path)) throw new Error("Referenced artifact escapes the repository.");
-  return [path, loadJsonFile(path)];
+  return [path, loadJsonFile(reference, { baseDir: base })];
 }
 
 export function validatePublicArtifacts(root = repositoryRoot) {
@@ -44,17 +38,18 @@ export function validatePublicArtifacts(root = repositoryRoot) {
       validateArtifact(kind, artifact);
       validated += 1;
       if (kind === "manifest") {
-        const [, bundle] = referencedJson(root, dirname(path), artifact.decoy.content);
+        const [, bundle] = referencedJson(dirname(path), artifact.decoy.content);
         validateDeployment(artifact, bundle);
       }
       if (kind === "scenario") {
         try {
-          const [manifestPath, manifest] = referencedJson(root, dirname(path), artifact.manifest);
+          const [manifestPath, manifest] = referencedJson(dirname(path), artifact.manifest);
           validateArtifact("manifest", manifest);
-          const [, bundle] = referencedJson(root, dirname(manifestPath), manifest.decoy.content);
+          const [, bundle] = referencedJson(dirname(manifestPath), manifest.decoy.content);
           validateDeployment(manifest, bundle);
         } catch (error) {
-          if (error?.code !== artifact.expectedError) throw error;
+          if (!Object.hasOwn(artifact, "expectedError") ||
+              !(error instanceof PenumbraError) || error.code !== artifact.expectedError) throw error;
         }
       }
     }

@@ -394,8 +394,10 @@ The encrypted progress flag's key derivation is normative for porting:
   and read the flag.
 - The `Manifest` fingerprint is `SHA-256(canonical-JSON(Manifest))`. The
   canonicalization rules (key sorting, whitespace handling, number
-  formatting) are specified in `schemas/manifest.schema.json` (forward
-  reference; v0.1 schema authoring is a later task). Every conformant SDK
+  formatting) remain a future full-draft contract requirement. They are
+  not specified by the checked-in limited-profile
+  `schemas/manifest.schema.json`, which validates document shape and does
+  not implement canonicalization. Every conformant SDK
   `MUST` use the same canonicalization so that two ports compute identical
   fingerprints for the same `Manifest`.
 - The flag is encrypted with AES-256-GCM (or platform-equivalent AEAD).
@@ -772,9 +774,12 @@ ports.
 
 The configurable policy fields referenced above and in the Default
 Behaviors table take the following concrete shapes in the `Manifest`. The
-canonical schema is authored in `manifest.schema.json`; the shapes below
-are the normative semantic minimum that every conformant `Manifest` schema
-`MUST` accept.
+full-draft policy schema remains future work; the shapes below are the
+normative semantic minimum that a future full-draft `Manifest` schema
+`MUST` accept. The checked-in `schemas/manifest.schema.json` covers only
+the limited executable profile's wipe tier and handler declarations,
+including each handler's failure policy. It does not define these full
+policy shapes.
 
 ```text
 failurePolicy: "fail-open" | "fail-closed"

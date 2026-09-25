@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -59,6 +59,28 @@ test("artifact validator fails if a required JSON category is empty", () => {
   const root = mkdtempSync(join(tmpdir(), "penumbra-empty-artifacts-"));
   try {
     assert.throws(() => validatePublicArtifacts(root), /no .*json|missing|empty/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("artifact validator rejects an escaping manifest in a nominal-success scenario", () => {
+  const root = mkdtempSync(join(repositoryRoot, "temporary-artifacts-"));
+  try {
+    cpSync(join(repositoryRoot, "examples"), join(root, "examples"), { recursive: true });
+    mkdirSync(join(root, "conformance/vectors"), { recursive: true });
+    const scenario = loadJsonFile("examples/scenarios/coercion-calculator.json");
+    writeFileSync(join(root, "conformance/vectors/valid.json"), JSON.stringify({
+      ...scenario, manifest: "../../examples/manifests/coercion-calculator.json",
+    }));
+    const scenarioPath = join(root, "examples/scenarios/coercion-calculator.json");
+    scenario.manifest = relative(dirname(scenarioPath), resolve(repositoryRoot, "../outside.json"));
+    assert.equal(Object.hasOwn(scenario, "expectedError"), false);
+    writeFileSync(scenarioPath, JSON.stringify(scenario));
+    assert.throws(() => validatePublicArtifacts(root), {
+      name: "PenumbraError",
+      code: "PATH_OUTSIDE_REPOSITORY",
+    });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

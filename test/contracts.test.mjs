@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
@@ -104,6 +105,37 @@ test("rejects oversized and malformed JSON with stable codes", () => {
     assert.throws(() => loadJsonFile("malformed.json", { baseDir }), {
       code: "JSON_INVALID",
     });
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("rejects a repository-local FIFO without blocking and with a stable code", (t) => {
+  const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
+  const baseDir = mkdtempSync(join(repositoryRoot, "temporary-fifo-"));
+  try {
+    const fifoPath = join(baseDir, "artifact.json");
+    const created = spawnSync("mkfifo", [fifoPath], { encoding: "utf8" });
+    if (created.error?.code === "ENOENT") {
+      t.skip("mkfifo is unavailable");
+      return;
+    }
+    assert.equal(created.status, 0, created.stderr);
+    const result = spawnSync(process.execPath, ["--input-type=module", "--eval", `
+      import assert from "node:assert/strict";
+      import { loadJsonFile } from "./lib/contracts.mjs";
+      assert.throws(() => loadJsonFile(process.argv[1]), {
+        name: "PenumbraError",
+        code: "FILE_READ_FAILED",
+      });
+    `, fifoPath], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      timeout: 3000,
+      killSignal: "SIGKILL",
+    });
+    assert.equal(result.error, undefined, "FIFO loading must finish before the child timeout");
+    assert.equal(result.status, 0, result.stdout + result.stderr);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

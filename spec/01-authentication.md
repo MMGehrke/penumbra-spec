@@ -69,7 +69,8 @@ interface AuthInput {
 }
 
 interface AuthConfig {
-  // Validated against schemas/manifest.schema.json#/$defs/auth-config.
+  // Requires a future full-draft auth-config schema; it is not defined in
+  // the checked-in limited-profile schemas/manifest.schema.json.
   // The shape of `parameters` is method-specific and is defined per-method
   // below in the Method Registry. Hosts MUST refuse to load a Manifest
   // whose auth-config does not validate.
@@ -118,10 +119,12 @@ stable reference.
 Every `verify()` call also receives an `AuthConfig` value drawn from the
 loaded `Manifest`. The parameters field is method-specific and is defined
 per-method in the Method Registry. Hosts `MUST` validate the entire
-`Manifest` against `manifest.schema.json` at process start and `MUST` refuse
-to load a `Manifest` whose auth-config does not validate; per-call
+`Manifest` against the future full-draft manifest schema at process start
+and `MUST` refuse to load a `Manifest` whose auth-config does not validate; per-call
 re-validation is not required if validation has already succeeded for the
-loaded `Manifest`.
+loaded `Manifest`. The checked-in `schemas/manifest.schema.json` validates
+only the limited executable profile's authentication method identifier;
+it does not define `AuthConfig` parameters or composition.
 
 ## Return Semantics
 
@@ -176,8 +179,8 @@ the configured `WipeTier` in the `Manifest` is `Recoverable-Lock`. If
 schema validation has been bypassed (an out-of-spec scenario the spec
 does not endorse), the implementation `SHOULD` treat any `Recover` return
 as `Reject` rather than transitioning to `Recovering`; a conformant
-implementation that has loaded a `Manifest` validated against
-`manifest.schema.json` will never encounter this case, since the schema
+full-draft implementation that has loaded a `Manifest` validated against
+the future full-draft manifest schema will never encounter this case, since it
 `MUST` reject configurations that include `recovery-passphrase` outside
 `Recoverable-Lock`. Only the `recovery-passphrase` method in the registry
 is permitted to return `Recover`; any other method returning `Recover` is
@@ -730,8 +733,9 @@ A `Manifest` `MAY` compose multiple methods so that a credential is accepted
 only when all (or any) of a configured set succeed. Composition lets a
 deployment require, for example, both a PIN and a paired device, or restrict
 unlock attempts to specific time windows. The composition syntax is part of
-the `Manifest`; the schema is defined in
-`schemas/manifest.schema.json#/$defs/auth-config`.
+the full-draft `Manifest` and requires a future auth-config schema. The
+checked-in `schemas/manifest.schema.json` does not define auth-config or
+support composition.
 
 ```json
 {
