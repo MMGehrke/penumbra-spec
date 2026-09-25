@@ -17,6 +17,12 @@ and the storage requirements for credential material. Implementers porting the
 spec to React Native, Flutter, iOS, or Android `MUST` treat this module's
 contracts as binding; any deviation breaks the conformance claim.
 
+These are full draft contracts. The repository's schemas and Node reference
+cover only [module 08's limited profile](./08-conformance-testing.md), which
+accepts supplied terminal outcomes and does not implement authentication or
+the auth-config shapes below. Galois source paths in this module are external
+historical references, not files in this repository or verified current code.
+
 ## The `AuthChallenge` Interface
 
 Every authentication method conforms to a single interface. The interface is
@@ -32,11 +38,12 @@ interface AuthChallenge {
 
   // Called by the host when input is received. May be invoked many times
   // before reaching a terminal state (e.g., partial PIN entry that has not
-  // yet hit the sentinel). MUST NOT throw; MUST return one of the four
-  // AuthResult values defined below. MUST take 300–600ms (see Timing
+  // yet hit the sentinel). MUST NOT throw; MUST return null for
+  // non-terminal accumulation or one of the four terminal AuthResult
+  // values defined below. MUST take 300–600ms (see Timing
   // Contract). The implementation owns its accumulated input across calls
   // until reset() is invoked or a terminal result is returned.
-  verify(input: AuthInput, config: AuthConfig): Promise<AuthResult>;
+  verify(input: AuthInput, config: AuthConfig): Promise<AuthResult | null>;
 
   // Called when the host wants to discard partial state, e.g., the user
   // backed out of the disguise input field or the screen was locked.
@@ -86,14 +93,15 @@ or the app is backgrounded). This satisfies the in-memory invariant in
 
 ### AuthResult
 
-`verify()` returns exactly one `AuthResult` value: `Unlock`, `Duress`,
-`Reject`, or `Recover`. The semantics of each value — which state-machine
+On completion, `verify()` returns exactly one terminal `AuthResult` value:
+`Unlock`, `Duress`, `Reject`, or `Recover`. The semantics of each value — which
+state-machine
 transition it triggers and what side effects the host `MUST` perform — are
 defined in the Return Semantics section below. Implementations `MUST-NOT`
-introduce additional `AuthResult` values; ports that need to express
-intermediate states (e.g., "input accepted but not yet terminal") `MUST`
-represent them within `Reject` plus accumulated internal state, never as a
-new return value.
+introduce additional `AuthResult` values. While input is accumulating,
+`verify()` returns `null`: no terminal result exists yet. The host `MUST-NOT`
+interpret this as `Reject`, enter a result transition, or reset the accumulated
+state. Only terminal results enter the architecture's transition table.
 
 ### AuthInput
 
@@ -117,12 +125,11 @@ loaded `Manifest`.
 
 ## Return Semantics
 
-`verify()` returns exactly one of four values. The state machine in
-`00-architecture.md` consumes this value and performs the corresponding
-transition. Implementations `MUST-NOT` introduce additional `AuthResult`
-values; ports that need to express a fifth outcome (e.g., "input accepted but
-not yet terminal") `MUST` represent it within `Reject` plus accumulated
-internal state, never as a new return value.
+Each completed attempt produces one of four terminal values. The state machine
+in `00-architecture.md` consumes that result and performs its transition.
+Non-terminal accumulation returns `null`, retains partial state until reset or
+completion, and does not enter this transition table. `Reject` always ends the
+attempt; it is never a signal to keep accumulating the same attempt.
 
 ### `Unlock`
 
@@ -209,7 +216,7 @@ Implementations:
 - `MUST` apply the window once per `verify()` call. Methods that maintain
   partial input state across calls (e.g., `pin-sequence` accumulating digits)
   `MUST` honor the window on every call, including the calls that return
-  `Reject` because the sentinel has not yet been reached.
+  `null` because the sentinel has not yet been reached.
 
 The timing contract is the spec's distillation of a defense already present
 in the Galois reference implementation (`components/StealthLayout.js`, lines
@@ -253,7 +260,7 @@ interface PinSequenceInput {
   char: string;
   // True if `char` is the configured sentinel. When true, the
   // AuthChallenge MUST evaluate the accumulated sequence and return
-  // a terminal AuthResult; otherwise it MUST return Reject and retain
+  // a terminal AuthResult; otherwise it MUST return null and retain
   // the accumulated state.
   isSentinel: boolean;
 }
@@ -277,7 +284,7 @@ interface PinSequenceConfig {
 
 Verification rules. Until the sentinel character has been received,
 `verify()` accumulates each character into internal state and returns
-`Reject` (with the timing window applied). On sentinel, the implementation
+`null` (with the timing window applied). On sentinel, the implementation
 hashes the accumulated sequence with argon2id (parameters per the Storage
 Requirements section), performs two constant-time comparisons against the
 configured unlock and duress hashes, and returns `Unlock`, `Duress`, or
@@ -385,7 +392,7 @@ interface GesturePatternConfig {
 ```
 
 Verification rules. Until the user lifts their finger (the gesture is
-complete), `verify()` returns `Reject`. On completion, the implementation
+complete), `verify()` returns `null`. On completion, the implementation
 rejects paths shorter than the configured minimum-point count, then
 canonicalizes the path as a comma-separated string of indices, hashes with
 argon2id, and performs constant-time comparisons against the configured
@@ -438,7 +445,7 @@ interface KnockPatternConfig {
 
 Verification rules. Until the user has finished tapping (a configurable
 inter-tap pause has elapsed), `verify()` accumulates tap timestamps and
-returns `Reject`. On completion, the implementation derives the observed
+returns `null`. On completion, the implementation derives the observed
 interval list, compares it to the configured unlock and duress rhythms
 within the configured tolerance per interval, and returns the matching
 `AuthResult` or `Reject`. The tap timestamps and observed intervals `MUST`
@@ -681,7 +688,7 @@ interface RecoveryPassphraseInput {
   // comparison.
   passphrase: string;
   // True when the user has submitted (e.g., pressed Enter or tapped
-  // a confirm action). Until then the AuthChallenge MUST return Reject.
+  // a confirm action). Until then the AuthChallenge MUST return null.
   isSentinel: boolean;
 }
 ```
@@ -698,7 +705,7 @@ interface RecoveryPassphraseConfig {
 ```
 
 Verification rules. Until the user has submitted the passphrase, `verify()`
-returns `Reject`. On submission, the implementation hashes the passphrase
+returns `null`. On submission, the implementation hashes the passphrase
 with argon2id and performs a constant-time comparison against the
 configured passphrase hash. A match returns `Recover`; a mismatch returns
 `Reject`. The implementation `MUST-NOT` return `Unlock` or `Duress` from
@@ -737,6 +744,10 @@ the `Manifest`; the schema is defined in
 ```
 
 ### all
+
+The composition rules below consume terminal leaf results. While a required
+leaf is still accumulating input, the host retains that partial attempt;
+`null` is neither success nor rejection and is not an `AuthResult`.
 
 The `all` operator requires every listed method to succeed (return its mapped
 non-`Reject` outcome) for the composite to succeed. If any leaf returns
@@ -824,7 +835,8 @@ EXPO_PUBLIC_DURESS_PIN=...
 ```
 
 (see `components/StealthLayout.js`, lines 24–30). The conformance suite
-(v0.2) `MUST` include a test vector that detects bundled plaintext
+(planned for v0.2; not present in this repository) `MUST` include a test vector
+that detects bundled plaintext
 credentials and fails the deployment.
 
 Hashing. All credential material `MUST` be hashed with argon2id (or a

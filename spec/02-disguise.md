@@ -16,12 +16,19 @@ framework fingerprint — that it is part of the penumbra-spec.
 
 This module specifies the `Disguise` contract every port `MUST` implement, the
 crash-resistance and fingerprint-avoidance requirements that distinguish a
-defensible disguise from a fragile one, the registry of five disguises shipped
+defensible disguise from a fragile one, the registry of five disguise IDs specified
 in v0.1, and the rules under which embedding applications `MAY` ship custom
 disguises while still claiming conformance. The `Disguise` is the most
 user-visible component of the spec — it is literally the first thing the
 adversary sees — and a failure here invalidates every other defense the spec
 provides.
+
+This repository ships no mobile UI implementations. These are draft requirements
+for future ports; [module 08](./08-conformance-testing.md) describes the executable
+profile. Galois source paths below are external historical references, not files
+in this repository or verified current implementations. All paths under
+conformance/test-vectors in this module designate planned v0.2 artifacts that
+are not present here.
 
 ## `Disguise` Contract
 
@@ -216,7 +223,7 @@ screen with the system status bar, no error dialog, no stack trace, no toast.
 The user-visible result `MUST` look like a real app loading slowly. The SDK
 `MUST-NOT` surface a crash dialog, a developer-tools red-box, or a framework
 fingerprint at this fall-through path. The fall-through screen is the same
-across all five shipped disguises so that an adversary cannot infer which
+across implementations of all five specified disguises so that an adversary cannot infer which
 disguise was configured by observing the failure mode.
 
 The fall-through `MUST` continue to accept user input and `MUST` still route
@@ -260,7 +267,7 @@ conformance vectors): for every distinct user touch event the disguise
 observes, exactly one `verify()` call against the configured `AuthChallenge`
 `MUST` execute, in temporal order. Two distinct touch events that arrive
 within the same render frame `MUST` produce two `verify()` calls, not one.
-Conformance test vectors at
+Planned v0.2 conformance test vectors at
 `conformance/test-vectors/02-disguise/concurrent-input.json` (v0.2) will
 exercise this rule by replaying multi-touch event streams and asserting
 per-event `verify()` invocations.
@@ -271,10 +278,10 @@ Genuine apps ship in many languages and follow the device's primary locale.
 A `Disguise` `MUST-NOT` show English text on a non-English-locale device:
 that asymmetry is a fingerprint an adversary can detect by toggling the
 device locale before launching the app. v0.1 disguises `SHOULD` localize to
-at least the device's primary language for every shipped registry entry; an
+at least the device's primary language for every implemented registry entry; an
 implementation that ships only an English-language disguise is a conformance
 violation when deployed on a device whose primary locale is non-English. The
-shipped registry entries below note locale support per disguise.
+specified registry entries below describe locale requirements per disguise.
 
 When a `Disguise` implementation's localized-catalog does not cover the
 device's primary locale, the implementation `MUST` fall back to the
@@ -301,7 +308,7 @@ A genuine calculator does not crash. A genuine notes app does not crash. A
 `Disguise` `MUST-NOT` crash either, because a crash log, a system-level error
 dialog, or a framework-emitted red-box reveals immediately that the app is
 not a real instance of the app it claims to be. Crash resistance is the
-single most testable requirement in this module: every shipped disguise has
+single most testable requirement in this module: every specified disguise has
 crash-resistance test vectors in `conformance/test-vectors/02-disguise/`, and
 a port that fails any of them `MUST-NOT-CLAIM` conformance for the affected
 disguise.
@@ -329,7 +336,7 @@ The required behaviors below are normative.
   parse; the disguise `MUST` do the same. Conformance test vectors include
   malformed-input cases (operator-only sequences, multiple consecutive
   decimals, paste of non-numeric strings into a calculator, etc.) for each
-  shipped disguise.
+  implemented disguise.
 
 - **Async errors.** All async operations `MUST-NOT` propagate exceptions to
   the OS. Async work — image decoding, font loading, layout settling, audio
@@ -357,10 +364,11 @@ The required behaviors below are normative.
   in-process encrypted log, never to a system crash reporter that would
   surface a framework-branded prompt.
 
-Conformance test vectors live in
+Planned v0.2 conformance test vectors would live in
 `conformance/test-vectors/02-disguise/crash-resistance.json` (v0.2 — the
 suite is authored as a separate task in the implementation plan). Each
-shipped registry entry below `MUST` pass every applicable test vector.
+implementation of a registry entry below `MUST` pass every applicable test vector
+when that suite is available.
 
 ## Fingerprint Avoidance
 
@@ -383,7 +391,7 @@ defend against every channel that applies to its target platform.
   swipe-right on the display to delete the most recent digit; iOS
   Calculator also supports long-press on the display to copy the current
   value. A disguise that implements only the visible buttons but ignores
-  these gestures is detectable by an adversary who tests them. The shipped
+  these gestures is detectable by an adversary who tests them. The specified
   registry entries below enumerate the gesture set per disguise; the
   conformance test vectors include a gesture-coverage check.
 
@@ -421,22 +429,24 @@ defend against every channel that applies to its target platform.
   calculator currently passes the splash, gesture, metadata, and network
   rules, but does not yet defend against battery/memory profiling.
 
-## Shipped Registry
+## Specified Registry
 
-The penumbra-spec v0.1 ships exactly five `Disguise` implementations. The
+The penumbra-spec v0.1 specifies exactly five `Disguise` IDs, not five shipped
+UI implementations. The
 registry is closed: ports `MUST-NOT` introduce new registry IDs without going
 through the v0.2 promotion process described in `09-threat-model.md`, and a
 `Manifest` referencing an unknown registry ID `MUST` fail validation.
 Embedding applications `MAY` register additional, custom disguises under the
 rules in the Custom Disguises section below; those custom disguises live
-outside the shipped registry.
+outside the specified registry. The limited profile schema accepts only the
+five specified IDs and does not implement custom UI registration.
 
 Each entry below specifies: the registry ID and human-readable display name;
 the visual-fidelity rules every port `MUST` honor; the input mapping that
 defines how user actions translate into `AuthInput.payload`; and platform
 notes covering OS-specific corner cases.
 
-**Note on registry asymmetry.** The registry ships two platform-specific
+**Note on registry asymmetry.** The registry specifies two platform-specific
 calculator variants (calculator-ios, calculator-android) but only one of
 each non-calculator disguise (notes, weather, unit-converter). This is
 intentional for v0.1: the calculator app is the lowest-fidelity disguise
@@ -454,7 +464,7 @@ conformance vectors are authored.
 ### calculator-ios
 
 A reproduction of the iOS system Calculator app. The Galois reference
-implementation (`components/StealthLayout.js`) is the v0.1 reference for this
+implementation (external historical source `components/StealthLayout.js`) is the draft reference for this
 disguise; ports `MUST` match its visual fidelity within the rules below.
 
 **Display name.** Calculator (matching the iOS system app's display name
@@ -754,7 +764,7 @@ the five-entry registry above. A custom disguise is registered with the SDK
 at startup (during `Init` per `00-architecture.md`) under an
 implementation-chosen ID; the `Manifest`'s disguise.id field references that
 custom ID. The SDK refuses to mount a disguise whose ID does not resolve to
-either a shipped registry entry or a registered custom disguise.
+either a specified registry entry or a registered custom disguise.
 
 A custom disguise that claims spec conformance `MUST` satisfy every
 requirement below.
@@ -779,14 +789,14 @@ requirement below.
   of that app (a specific OS version or a specific application version),
   and which platforms (iOS, Android, both). A claim like "imitates a
   generic notes app" is acceptable for genre-imitating disguises (analogous
-  to the notes shipped entry); a claim like "imitates iOS Calculator"
+  to the specified notes entry); a claim like "imitates iOS Calculator"
   must specify the iOS version range against which the disguise was
   validated. The conformance manifest `MUST` carry the version-range
   declaration.
 
 - **Network during `Disguised`.** The custom disguise `MUST-NOT` originate
   network requests during the `Disguised` state, per the same rule that
-  governs shipped disguises. The visual affordance of network capability
+  governs specified disguises. The visual affordance of network capability
   is permitted (an iCloud-sync icon on a notes-style disguise, a
   search-loading spinner on a weather-style disguise) so long as no actual
   wire traffic originates from the disguise.

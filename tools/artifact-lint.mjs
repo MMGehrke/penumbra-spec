@@ -7,6 +7,7 @@ const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 
 // Keep this explicit: missing public contracts or entry points must fail CI.
 export const requiredArtifacts = [
+  "spec/08-conformance-testing.md",
   "schemas/manifest.schema.json",
   "schemas/decoy-content.schema.json",
   "schemas/scenario.schema.json",

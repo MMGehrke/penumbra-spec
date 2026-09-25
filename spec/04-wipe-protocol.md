@@ -18,6 +18,12 @@ information. Implementers porting the spec to React Native, Flutter, iOS, or
 Android `MUST` treat this module's contracts as binding; deviation is a
 conformance violation.
 
+This is the full draft protocol. The Node reference simulates only the subset
+in [module 08](./08-conformance-testing.md); it invokes no real wipe handlers,
+stores no progress flags, and implements no watchdog or recovery. Its limited
+schema uses wipe.tier, not the full draft wipeProtocol shapes below. Galois
+source paths here are external historical references, not repository files.
+
 The wipe protocol is reached by exactly one path: an `AuthChallenge` (defined
 in `01-authentication.md`) returns `Duress`, the state machine in
 `00-architecture.md` transitions from `Authenticating` to `Wiping`, and the
@@ -337,12 +343,10 @@ mutual-exclusion rule, the same registered resource is never targeted by
 both `Hard` and `Recoverable-Lock`, nor by both `Medium` and
 `Recoverable-Lock`.
 
-Handlers within a tier `MAY` run sequentially or in parallel at the SDK's
-discretion, provided that the tier-completion guarantee holds: the SDK
-`MUST` await all handlers in tier N before invoking any handler in tier
-N+1. Implementations that parallelize within a tier `MUST` apply the
-maxDurationMs watchdog to the tier-aggregate elapsed time, not to each
-parallel branch independently.
+Handlers `MUST` execute sequentially in registration order within each tier.
+The SDK `MUST` await each handler's completion or resolve its failure policy
+before invoking the next handler. Parallel execution within a tier is not
+permitted. The maxDurationMs watchdog bounds the total chain elapsed time.
 
 ### Idempotence
 
@@ -417,9 +421,14 @@ ignored re-trigger from a single duress.
 
 Total wipe duration `MUST` be bounded. The SDK enforces a manifest-configured
 wipeProtocol.maxDurationMs (default 30000 ms). Handlers exceeding their
-tier's share of the budget are aborted by the SDK; aborted handlers count as
-incomplete and follow the fail-open or fail-closed policy below. The bound
-exists to satisfy a hard real-world constraint: a duress event happens when
+tier's share of the budget are aborted by the SDK; aborted and unstarted
+handlers count as incomplete and follow each handler's configured failure
+policy below. The SDK `MUST` record pending work in the encrypted progress
+flag. Fail-open permits continuation to `Decoyed` only when no incomplete
+handler requires fail-closed. Any fail-closed duration abort leaves the machine
+in `Disguised` with pending work and `MUST-NOT` allow `Active` until that work
+completes. No further handler is started after the duration budget expires.
+The bound exists to satisfy a hard real-world constraint: a duress event happens when
 an adversary is seconds-to-minutes from inspection, not minutes-to-hours,
 and an unbounded wipe that runs for several minutes increases the chance the
 device is forcibly powered off mid-wipe. Bounding the chain trades worst-case
@@ -697,7 +706,7 @@ default. The behaviors below are normative.
 | Battery dies during `Wiping` | resume from encrypted progress flag at next launch; complete remaining handlers; THEN transition to `Decoyed` | No (security-critical) | — |
 | Network unreachable during `Hard` panic webhook | per-handler networkPolicy: retry with exponential backoff (default 3 attempts at 1000 / 2000 / 4000 ms), or fail-open after exhaustion | Yes | per-handler networkPolicy |
 | `RecoveryKey` provider unreachable during `Recoverable-Lock` | fall back per wipeProtocol.recoveryUnreachablePolicy: degrade-to-medium (default) or fail-closed | Yes | wipeProtocol.recoveryUnreachablePolicy |
-| Wipe exceeds maxDurationMs | abort remaining handlers; record incomplete state in the encrypted progress flag; transition to `Decoyed` | Yes (the budget) | wipeProtocol.maxDurationMs |
+| Wipe exceeds maxDurationMs | abort remaining handlers; record pending work; apply each handler's policy: fail-open may reach `Decoyed`, fail-closed stays `Disguised` and blocks `Active` | Yes (budget and handler policy) | wipeProtocol.maxDurationMs; failurePolicy |
 | Concurrent `DuressEvent` re-trigger during `Wiping` | ignore the second event; continue the first | No (idempotence-driven) | — |
 | `RecoveryKey` zeroing fails (e.g., key was paged out before zero) | best-effort: rely on platform memory-locking where used; mark in audit log; do not block wipe completion | No (platform-bounded) | — |
 
@@ -860,9 +869,8 @@ tradeoff. The warning `MUST` make clear that the recovery key is
 itself a thing an adversary can demand, that the chosen storage strategy
 determines how hard that demand is to satisfy, and that for some threat
 models the destroying tiers (`Medium` or `Hard`) provide stronger
-protection. The shell-app onboarding wizard (Sub-project 3 in the
-penumbra-spec implementation plan) implements this warning as the
-reference example.
+protection. A shell-app onboarding wizard is planned as a reference example;
+no such mobile component ships in this repository.
 
 This warning is normative for documentation, not for runtime: a port
 that omits the onboarding warning is non-conformant and `MUST-NOT-CLAIM`

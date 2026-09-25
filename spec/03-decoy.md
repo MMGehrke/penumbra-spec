@@ -6,6 +6,13 @@
 
 ## Purpose
 
+This is a full draft UI and content contract. No decoy mobile component or SDK
+ships in this repository. The executable `decoy-tourist-info` artifact is a
+profile fixture, described in [module 08](./08-conformance-testing.md). Galois
+source paths below are external historical references, not repository files or
+verified current code. Paths under conformance/test-vectors refer to planned
+v0.2 artifacts; none of those future vectors are present here.
+
 This module defines the user-visible artifact shown after a `DuressEvent` has
 been processed and the `WipeHandler` chain has completed: the `Decoy`. Its job
 is to satisfy an inspector's curiosity long enough that they hand the device
@@ -471,17 +478,17 @@ Per-tier deployment requirements:
 
 ## Content-Bundle Protocol
 
-Decoy content is shipped as a JSON bundle conforming to
-`schemas/decoy-content.schema.json` (forward reference; the schema is
-authored as a later task in the implementation plan, the same way
-`04-wipe-protocol.md` forward-references `manifest.schema.json`). The
+The full draft proposes decoy content as a JSON bundle with the fields below.
+The repository's [decoy schema](../schemas/decoy-content.schema.json) implements
+only module 08's profileVersion, decoyId, credibilityTier, locale, and content
+fields. It does not implement this full draft payload/meta contract. The
 bundle protocol decouples the `Decoy`'s *visual presentation* (the
 `Decoy` implementation) from the *content* the visualization renders.
 This separation lets a deployment swap content (different museum lists
 for different cities, locale variants, themed bundles for cover stories)
 without recompiling or revalidating the `Decoy` code.
 
-A bundle has the following normative fields, validated by the schema:
+A full draft bundle has the following normative fields for a future schema:
 
 - decoyId — the `Decoy` implementation this bundle targets. The SDK
   validates that this equals the mounting `Decoy`'s id; mismatches
@@ -523,8 +530,9 @@ Bundles `SHOULD` localize like `Disguise` content does in
 device's primary locale is available, the SDK `MUST` load it; when it
 is not, the SDK `MUST` fall back to the localization the genuine app's
 platform-native equivalent uses on the same device. For the
-`decoy-tourist-info` reference implementation, the SDK ships an en-US
-bundle that serves as the per-decoy locale fallback (used when a
+`decoy-tourist-info` profile fixture, this repository includes en-US content,
+but no UI or locale fallback runtime. A future port's default bundle would
+serve as the per-decoy locale fallback (used when a
 deployment-authored bundle for the device locale is not available). The
 per-decoy locale fallback is distinct from the cross-decoy
 *safety-fallback decoy* (Safety-Fallback Decoy subsection below):
@@ -540,8 +548,8 @@ explicit conformance-manifest documentation.
 
 Bundles `MAY` ship by any of the following routes:
 
-- Inside the SDK package (the SDK ships a default bundle for each
-  shipped `Decoy` implementation, for use as a deployment's primary
+- Inside a future SDK package (a port may ship a default bundle for each
+  implemented `Decoy`, for use as a deployment's primary
   content bundle in single-locale builds).
 - Alongside the host app at install time (the embedding application
   bundles its own authored content into the app binary; this is the
@@ -599,7 +607,7 @@ ports `MAY` choose richer content provided they document it in the
 conformance manifest, but `SHOULD` converge on the v0.2 vector when
 published.
 
-The SDK ships the same fallback content across all configured decoy
+An SDK implementing this draft `MUST` use the same fallback content across all configured decoy
 implementations so an inspector who reaches the fallback path on
 multiple devices or deployments cannot distinguish them by fallback
 content. Deployments that configured different `Decoy` implementations
@@ -624,28 +632,24 @@ on the inputs the component currently handles.
 
 ### decoy-tourist-info
 
-The generic decoy implementation `decoy-tourist-info` is the v0.1
-canonical migration target for Galois's `components/DecoyMode.js`. It
-is the spec's reference example of how a deployment-specific hardcoded
-decoy migrates to the bundle-driven decoy contract. It is not a member
-of a fixed shipped registry the way each `Disguise` registry entry is
-in `02-disguise.md` — the v0.1 decoy registry is open to deployment-
-authored decoy implementations under the same general rules that govern
-custom disguises in `02-disguise.md`'s Custom Disguises section. The
-`decoy-tourist-info` id is the SDK-shipped reference; embedding
-applications `MAY` register their own decoy ids alongside it.
+The identifier `decoy-tourist-info` names the limited profile fixture in
+[tourist-info.json](../examples/decoy-content/tourist-info.json). It is not an
+SDK-shipped mobile component. The draft also uses that ID for a proposed
+migration of Galois's external historical `components/DecoyMode.js` to a
+bundle-driven component; that migration has not been implemented here.
+The full draft decoy registry is open to deployment-authored implementations
+under the Custom Decoys rules below.
 
 ### Migration Path to Conformant Decoy
 
-Per this spec, the existing `DecoyMode.js` content migrates to a
-`decoy-content.schema.json`-conformant bundle named
-`travel-tourist-info.glance.v1.json`, and the component itself becomes
+The proposed migration would move the external `DecoyMode.js` content to
+a future full-draft-schema bundle named
+`travel-tourist-info.glance.v1.json` (a planned artifact, not a repository file), and the component would become
 a generic decoy implementation with id `decoy-tourist-info` that
 consumes any bundle whose decoyId equals `decoy-tourist-info`.
 
-The `decoy-tourist-info` implementation's per-decoy bundle schema is
-authored as part of `decoy-content.schema.json` (forward reference,
-per the Content-Bundle Protocol section above). Its payload schema
+The proposed component's per-decoy bundle schema is not implemented in the
+current `decoy-content.schema.json`. The proposed full draft payload schema
 specifies four content arrays — museums, transportation, restaurants,
 attractions — each containing entries with the fields the existing
 `DecoyMode.js` already renders (name, description, image reference,
@@ -659,7 +663,8 @@ bundle drives Galois, the React Native shell, and any future port.
 
 ### Upgrade to `Inspection` Tier
 
-The migrated `decoy-tourist-info` is `Glance`-tier as authored. To
+The proposed migrated `decoy-tourist-info` component would begin at `Glance`
+tier; this is distinct from the profile fixture's declared metadata. To
 upgrade to `Inspection` tier, the implementation `MUST` add the
 following capabilities. Each capability is a normative bullet for the
 upgrade; an implementation that adds some but not all `MUST-NOT-CLAIM`
@@ -731,7 +736,7 @@ implementation, the following rules `MUST` be honored:
 ## Custom Decoys
 
 Unlike the `Disguise` registry, which is closed in v0.1 (every conformant
-deployment uses one of the five entries in `02-disguise.md`'s Shipped
+deployment uses one of the five entries in `02-disguise.md`'s Specified
 Registry), the `Decoy` registry is **open**: deployments `MAY` ship their
 own `Decoy` implementations under deployment-authored decoy ids. The
 asymmetry is principled — `Disguise` ships against OS-level fingerprint
@@ -742,7 +747,7 @@ implementation into an SDK registry would create needless friction for
 what is essentially "a component that reads a JSON bundle."
 
 A custom `Decoy` `MUST` satisfy every requirement that applies to the
-SDK-shipped `decoy-tourist-info`:
+proposed `decoy-tourist-info` mobile implementation:
 
 - Implement the `Decoy` contract exactly (every interface member;
   the resetAccumulatedState() method from `02-disguise.md` is N/A
@@ -757,8 +762,8 @@ SDK-shipped `decoy-tourist-info`:
   declares `Sustained` `MUST-NOT-CLAIM` conformance unless its content
   graph satisfies every `Sustained` requirement in the Credibility
   Tiers section.
-- Document its bundle schema. Because `decoy-content.schema.json` uses
-  per-decoy $refs for the payload field, a custom decoy id
+- Document its bundle schema. The full draft proposes
+  per-decoy $refs for the payload field, so a custom decoy id
   contributes its own sub-schema. The deployment `MUST` publish this
   sub-schema and `MUST` reference it from `decoy-content.schema.json`
   (in v0.2 this is enforced by schema validation; in v0.1 it is a
@@ -767,12 +772,12 @@ SDK-shipped `decoy-tourist-info`:
   published checklist lives in `02-disguise.md`'s Fingerprint Avoidance
   section and applies to `Decoy` implementations equally).
 
-A custom decoy id `MUST` not collide with any SDK-shipped id (currently
-just `decoy-tourist-info`). Deployments `SHOULD` namespace their decoy
+A custom decoy id `MUST` not collide with the reserved profile fixture id
+`decoy-tourist-info`. Deployments `SHOULD` namespace their decoy
 ids (e.g., `acme-corp/notes-style-decoy`) to avoid future collisions as
 the SDK adds more shipped decoys.
 
 Apps that fail any of the above `MUST-NOT-CLAIM` conformance. The SDK
-refuses to mount a `Decoy` whose id is not registered (either as an
-SDK-shipped id or as a deployment-registered custom id) and falls back
+refuses to mount a `Decoy` whose id is not registered (either as a
+reserved reference id or as a deployment-registered custom id) and falls back
 to the safety-fallback decoy per the Safety-Fallback Decoy subsection.
