@@ -76,6 +76,52 @@ test("relative Markdown links report missing targets and ignore present, externa
   }
 });
 
+test("relative Markdown links inspect nested-bracket labels", () => {
+  const root = mkdtempSync(join(tmpdir(), "penumbra-nested-label-"));
+  try {
+    const markdownPath = join(root, "notes.md");
+    writeFileSync(markdownPath, "[nested [label]](missing-nested.md)\n");
+    assert.deepEqual(findMissingLocalLinks(markdownPath), ["missing-nested.md"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("relative Markdown links preserve balanced parentheses in destinations", () => {
+  const root = mkdtempSync(join(tmpdir(), "penumbra-link-parentheses-"));
+  try {
+    const markdownPath = join(root, "notes.md");
+    writeFileSync(join(root, "present(1).md"), "present");
+    writeFileSync(markdownPath, "[ok](present(1).md) [bad](missing(1).md)\n");
+    assert.deepEqual(findMissingLocalLinks(markdownPath), ["missing(1).md"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("relative Markdown links handle escaped brackets and destination parentheses", () => {
+  const root = mkdtempSync(join(tmpdir(), "penumbra-link-escapes-"));
+  try {
+    const markdownPath = join(root, "notes.md");
+    writeFileSync(markdownPath, "[escaped \\] label](missing\\(escaped\\).md)\n");
+    assert.deepEqual(findMissingLocalLinks(markdownPath), ["missing(escaped).md"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("malformed percent escapes produce a controlled invalid-link result", () => {
+  const root = mkdtempSync(join(tmpdir(), "penumbra-link-encoding-"));
+  try {
+    const markdownPath = join(root, "notes.md");
+    writeFileSync(join(root, "present%ZZ.md"), "present");
+    writeFileSync(markdownPath, "[bad](present%ZZ.md)\n");
+    assert.deepEqual(findMissingLocalLinks(markdownPath), ["present%ZZ.md"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("required artifact inventory detects a missing schema in an isolated root", () => {
   const root = mkdtempSync(join(tmpdir(), "penumbra-inventory-"));
   try {
