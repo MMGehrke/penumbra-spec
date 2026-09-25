@@ -10,6 +10,7 @@
     "ci": "npm run validate && npm run lint && npm run xref"
   },
   "devDependencies": {
+    "ajv": "^8.20.0",
     "ajv-cli": "^5.0.0",
     "markdownlint-cli": "^0.41.0"
   }

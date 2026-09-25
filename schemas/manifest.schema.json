@@ -1,0 +1,78 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://penumbra-spec.example/schemas/manifest.schema.json",
+  "title": "Penumbra executable profile manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profileVersion", "threatTier", "disguise", "authentication", "wipe", "decoy"],
+  "properties": {
+    "profileVersion": { "const": "0.1" },
+    "threatTier": { "enum": ["Casual", "Coercion", "Advanced"] },
+    "disguise": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": {
+          "enum": ["calculator-ios", "calculator-android", "notes", "weather", "unit-converter"]
+        }
+      }
+    },
+    "authentication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method"],
+      "properties": {
+        "method": {
+          "enum": ["pin-sequence", "math-result", "gesture-pattern", "knock-pattern", "time-window-gate", "location-gate", "paired-device", "recovery-passphrase"]
+        }
+      }
+    },
+    "wipe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tier", "handlers"],
+      "properties": {
+        "tier": { "$ref": "#/$defs/wipeTier" },
+        "handlers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "tier", "failurePolicy"],
+            "properties": {
+              "id": { "$ref": "#/$defs/identifier" },
+              "tier": { "$ref": "#/$defs/wipeTier" },
+              "failurePolicy": { "enum": ["fail-open", "fail-closed", "degrade-to-medium"] }
+            }
+          }
+        }
+      }
+    },
+    "decoy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "credibilityTier", "content"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "credibilityTier": { "enum": ["Glance", "Inspection", "Sustained"] },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^(?:\\.\\./)?[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*\\.json$"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "wipeTier": { "enum": ["Soft", "Medium", "Hard", "Recoverable-Lock"] }
+  }
+}
