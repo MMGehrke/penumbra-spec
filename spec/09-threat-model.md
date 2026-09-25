@@ -15,6 +15,11 @@ surface entirely, and records the spec's own limits as a documentation artifact.
 Implementers and end-users `MUST` read this module to set accurate expectations
 before deploying against any tier.
 
+The defenses below are draft requirements and intended properties of future
+mobile ports, not protections demonstrated by this repository. Its Node
+simulator performs no authentication, deletion, encryption, or mobile UI work.
+Passing its limited profile does not establish any threat-tier defense.
+
 ## Defended Threats
 
 The following threats are within scope. For each, the table row in
@@ -220,13 +225,18 @@ it in v0.1.
 
 ## Spec's Own Limits
 
-The penumbra-spec is a documentation artifact. It describes correct behavior; it
-cannot enforce conformance at runtime. The following caveats apply at all tiers.
+The penumbra-spec combines a draft specification with a limited executable
+profile. The Node tools enforce that profile's data contracts and compare
+simulated traces; they do not enforce the full draft in a mobile runtime.
+The following caveats apply at all tiers.
 
-**Conformance suite is necessary but not sufficient.** The conformance test
-vectors (`08-conformance-testing.md`, v0.2) verify specific behaviors against
-known inputs. Passing the full suite does not guarantee the port is bug-free,
-thread-safe, or free of platform-specific edge cases not covered by the vectors.
+**Limited profile agreement is not security conformance.** The current vectors
+in [module 08](./08-conformance-testing.md) compare supplied outcomes with a
+deterministic reference. Passing demonstrates only agreement with that limited
+profile; it does not establish full spec conformance, mobile correctness,
+thread safety, UI credibility, or protection against coercion or forensic
+recovery. Broader v0.2 platform vectors mentioned in other modules are planned
+artifacts, not files in this repository.
 
 **Threat-tier markers are advisory for publishable ports.** The `MUST`,
 `MUST-NOT`, and `MUST-NOT-CLAIM` markers in the Per-Tier Feature Matrix are

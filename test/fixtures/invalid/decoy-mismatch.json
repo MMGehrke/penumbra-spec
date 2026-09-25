@@ -1,0 +1,13 @@
+{
+  "profileVersion": "0.1",
+  "decoyId": "decoy-other",
+  "credibilityTier": "Inspection",
+  "locale": "en-US",
+  "content": {
+    "title": "Visitor Information",
+    "items": [
+      { "title": "City Museum", "description": "Open daily with exhibitions and guided tours." },
+      { "title": "Riverside Walk", "description": "A public path with viewpoints and nearby cafes." }
+    ]
+  }
+}

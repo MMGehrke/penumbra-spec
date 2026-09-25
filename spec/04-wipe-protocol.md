@@ -18,6 +18,12 @@ information. Implementers porting the spec to React Native, Flutter, iOS, or
 Android `MUST` treat this module's contracts as binding; deviation is a
 conformance violation.
 
+This is the full draft protocol. The Node reference simulates only the subset
+in [module 08](./08-conformance-testing.md); it invokes no real wipe handlers,
+stores no progress flags, and implements no watchdog or recovery. Its limited
+schema uses wipe.tier, not the full draft wipeProtocol shapes below. Galois
+source paths here are external historical references, not repository files.
+
 The wipe protocol is reached by exactly one path: an `AuthChallenge` (defined
 in `01-authentication.md`) returns `Duress`, the state machine in
 `00-architecture.md` transitions from `Authenticating` to `Wiping`, and the
@@ -337,12 +343,10 @@ mutual-exclusion rule, the same registered resource is never targeted by
 both `Hard` and `Recoverable-Lock`, nor by both `Medium` and
 `Recoverable-Lock`.
 
-Handlers within a tier `MAY` run sequentially or in parallel at the SDK's
-discretion, provided that the tier-completion guarantee holds: the SDK
-`MUST` await all handlers in tier N before invoking any handler in tier
-N+1. Implementations that parallelize within a tier `MUST` apply the
-maxDurationMs watchdog to the tier-aggregate elapsed time, not to each
-parallel branch independently.
+Handlers `MUST` execute sequentially in registration order within each tier.
+The SDK `MUST` await each handler's completion or resolve its failure policy
+before invoking the next handler. Parallel execution within a tier is not
+permitted. The maxDurationMs watchdog bounds the total chain elapsed time.
 
 ### Idempotence
 
@@ -357,7 +361,11 @@ process kill, hardware failure) and resumed at the next launch.
 The SDK records progress in an encrypted persistent flag whose key is
 derived from device-bound material plus the loaded `Manifest` fingerprint.
 The flag records, for each tier, which handlers have confirmed successful
-completion. On the next launch after an interruption, the SDK detects the
+completion and which incomplete handlers have an applied fail-open decision.
+Incomplete fail-open work remains durably recorded for retry; a policy decision
+`MUST-NOT` be recorded as successful execution. Unresolved fail-closed work
+remains pending and blocks both `Decoyed` and `Active`.
+On the next launch after an interruption or deferred fail-open work, the SDK detects the
 flag during `Init` (per the Failure-Mode Transitions section of
 `00-architecture.md`), determines the earliest unfinished position in the
 cascade `Soft` → `Medium` → `Hard` → `Recoverable-Lock`, and resumes the
@@ -386,22 +394,28 @@ The encrypted progress flag's key derivation is normative for porting:
   and read the flag.
 - The `Manifest` fingerprint is `SHA-256(canonical-JSON(Manifest))`. The
   canonicalization rules (key sorting, whitespace handling, number
-  formatting) are specified in `schemas/manifest.schema.json` (forward
-  reference; v0.1 schema authoring is a later task). Every conformant SDK
+  formatting) remain a future full-draft contract requirement. They are
+  not specified by the checked-in limited-profile
+  `schemas/manifest.schema.json`, which validates document shape and does
+  not implement canonicalization. Every conformant SDK
   `MUST` use the same canonicalization so that two ports compute identical
   fingerprints for the same `Manifest`.
 - The flag is encrypted with AES-256-GCM (or platform-equivalent AEAD).
   The nonce is a fresh 12-byte random value per flag write. The
   associated-data field includes the spec version string. The plaintext
   payload encodes tier progress as JSON of the form
-  `{ "tier": "Soft" | "Medium" | "Hard" | "Recoverable-Lock", "completedHandlerIds": string[] }`.
+  `{ "tier": "Soft" | "Medium" | "Hard" | "Recoverable-Lock", "completedHandlerIds": string[], "failOpenHandlerIds": string[] }`.
+  The two handler lists `MUST` be disjoint. The second list records policy-approved
+  incomplete work, not completion; handlers in that list remain eligible for retry.
 
 When the SDK resumes a wipe, the user-visible disguise persists throughout
-the resumed run. The resumed wipe completes (or applies fail-open) before
-the state machine transitions to `Decoyed`. The SDK `MUST-NOT` transition
-to `Decoyed` while wipe handlers are still pending; doing so would let an
-adversary who relaunches a partially-wiped device observe the decoy on a
-device that still contains plaintext data — the worst of both worlds.
+the resumed run. Before entering `Decoyed`, every selected handler `MUST` either
+complete successfully or have an applied fail-open decision. Policy-approved
+fail-open work may remain incomplete and durably recorded for retry without
+blocking `Decoyed`; this accepts the incomplete-wipe risk described under
+fail-open. Unresolved fail-closed work `MUST-NOT` be skipped: the machine remains
+`Disguised`, and both `Decoyed` and `Active` remain blocked until that work
+completes. The same distinction applies to initial runs and duration expiry.
 
 ### Concurrent Re-Trigger
 
@@ -417,9 +431,14 @@ ignored re-trigger from a single duress.
 
 Total wipe duration `MUST` be bounded. The SDK enforces a manifest-configured
 wipeProtocol.maxDurationMs (default 30000 ms). Handlers exceeding their
-tier's share of the budget are aborted by the SDK; aborted handlers count as
-incomplete and follow the fail-open or fail-closed policy below. The bound
-exists to satisfy a hard real-world constraint: a duress event happens when
+tier's share of the budget are aborted by the SDK; aborted and unstarted
+handlers count as incomplete and follow each handler's configured failure
+policy below. The SDK `MUST` record pending work in the encrypted progress
+flag. Fail-open permits continuation to `Decoyed` only when no incomplete
+handler requires fail-closed. Any fail-closed duration abort leaves the machine
+in `Disguised` with pending work and `MUST-NOT` allow `Active` until that work
+completes. No further handler is started after the duration budget expires.
+The bound exists to satisfy a hard real-world constraint: a duress event happens when
 an adversary is seconds-to-minutes from inspection, not minutes-to-hours,
 and an unbounded wipe that runs for several minutes increases the chance the
 device is forcibly powered off mid-wipe. Bounding the chain trades worst-case
@@ -694,10 +713,10 @@ default. The behaviors below are normative.
 |---|---|---|---|
 | Single handler throws | fail-open: log to audit, continue with remaining handlers in this tier and subsequent tiers | Yes | per-handler failurePolicy in the `Manifest` |
 | All handlers in a tier throw | fail-open: log, proceed to the next tier | Yes | per-tier failurePolicy in the `Manifest` |
-| Battery dies during `Wiping` | resume from encrypted progress flag at next launch; complete remaining handlers; THEN transition to `Decoyed` | No (security-critical) | — |
+| Battery dies during `Wiping` | resume from encrypted progress flag at next launch; enter `Decoyed` only after remaining handlers complete or have applied fail-open decisions; unresolved fail-closed work blocks `Decoyed` and `Active` | No (resume required; handler policies still apply) | — |
 | Network unreachable during `Hard` panic webhook | per-handler networkPolicy: retry with exponential backoff (default 3 attempts at 1000 / 2000 / 4000 ms), or fail-open after exhaustion | Yes | per-handler networkPolicy |
 | `RecoveryKey` provider unreachable during `Recoverable-Lock` | fall back per wipeProtocol.recoveryUnreachablePolicy: degrade-to-medium (default) or fail-closed | Yes | wipeProtocol.recoveryUnreachablePolicy |
-| Wipe exceeds maxDurationMs | abort remaining handlers; record incomplete state in the encrypted progress flag; transition to `Decoyed` | Yes (the budget) | wipeProtocol.maxDurationMs |
+| Wipe exceeds maxDurationMs | abort remaining handlers; record pending work; apply each handler's policy: fail-open may reach `Decoyed`, fail-closed stays `Disguised` and blocks `Active` | Yes (budget and handler policy) | wipeProtocol.maxDurationMs; failurePolicy |
 | Concurrent `DuressEvent` re-trigger during `Wiping` | ignore the second event; continue the first | No (idempotence-driven) | — |
 | `RecoveryKey` zeroing fails (e.g., key was paged out before zero) | best-effort: rely on platform memory-locking where used; mark in audit log; do not block wipe completion | No (platform-bounded) | — |
 
@@ -724,7 +743,9 @@ Under `fail-closed`, a handler error halts the wipe chain immediately; the
 state machine transitions back to `Disguised` per the `Wiping → Disguised`
 transition in `00-architecture.md`, and the failed handler is retried at
 the next launch via the same resume semantics that handle battery
-exhaustion. The user-visible result of `fail-closed` is that the duress
+exhaustion. Until that work completes, it blocks both `Decoyed` and `Active`;
+retaining a fail-open retry record elsewhere does not relax this guard.
+The user-visible result of `fail-closed` is that the duress
 attempt appears to have produced a normal `Reject` (the user sees the
 disguise again, not the decoy).
 
@@ -753,9 +774,12 @@ ports.
 
 The configurable policy fields referenced above and in the Default
 Behaviors table take the following concrete shapes in the `Manifest`. The
-canonical schema is authored in `manifest.schema.json`; the shapes below
-are the normative semantic minimum that every conformant `Manifest` schema
-`MUST` accept.
+full-draft policy schema remains future work; the shapes below are the
+normative semantic minimum that a future full-draft `Manifest` schema
+`MUST` accept. The checked-in `schemas/manifest.schema.json` covers only
+the limited executable profile's wipe tier and handler declarations,
+including each handler's failure policy. It does not define these full
+policy shapes.
 
 ```text
 failurePolicy: "fail-open" | "fail-closed"
@@ -860,9 +884,8 @@ tradeoff. The warning `MUST` make clear that the recovery key is
 itself a thing an adversary can demand, that the chosen storage strategy
 determines how hard that demand is to satisfy, and that for some threat
 models the destroying tiers (`Medium` or `Hard`) provide stronger
-protection. The shell-app onboarding wizard (Sub-project 3 in the
-penumbra-spec implementation plan) implements this warning as the
-reference example.
+protection. A shell-app onboarding wizard is planned as a reference example;
+no such mobile component ships in this repository.
 
 This warning is normative for documentation, not for runtime: a port
 that omits the onboarding warning is non-conformant and `MUST-NOT-CLAIM`

@@ -1,0 +1,27 @@
+{
+  "profileVersion": "0.1",
+  "name": "fail-closed",
+  "manifest": "../../examples/manifests/coercion-calculator.json",
+  "events": [
+    { "type": "initialize" },
+    { "type": "submit", "shape": "calculator-expression" },
+    { "type": "auth-result", "outcome": "Duress" }
+  ],
+  "handlerOutcomes": {
+    "revoke-session": { "ok": true },
+    "delete-local-data": { "ok": false, "code": "simulated-failure" }
+  },
+  "expected": {
+    "finalState": "Disguised",
+    "trace": [
+      { "from": "Init", "event": "initialize", "to": "Disguised" },
+      { "from": "Disguised", "event": "submit", "to": "Authenticating" },
+      { "from": "Authenticating", "event": "auth:Duress", "to": "Wiping" },
+      { "from": "Wiping", "event": "wipe:failed", "to": "Disguised" }
+    ],
+    "handlerResults": [
+      { "handlerId": "revoke-session", "policy": "fail-open", "outcome": "success" },
+      { "handlerId": "delete-local-data", "policy": "fail-closed", "outcome": "failure" }
+    ]
+  }
+}

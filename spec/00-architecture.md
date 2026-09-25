@@ -19,7 +19,8 @@ backticks in any spec module refers to the definition here unless the referencin
 module explicitly overrides it.
 
 **`AuthChallenge`** — Interface every authentication method conforms to. Accepts
-user input and returns exactly one of `Unlock`, `Duress`, `Reject`, or `Recover`.
+user input and, on completion, returns exactly one of `Unlock`, `Duress`,
+`Reject`, or `Recover`. Non-terminal accumulation produces no `AuthResult`.
 The full registry of conformant `AuthChallenge` methods is defined in
 `01-authentication.md`.
 
@@ -35,7 +36,7 @@ bundle protocol are defined in `03-decoy.md`.
 **`Disguise`** — The visible-from-launch UI that presents the application as a
 different, innocuous app (calculator, notes, weather, etc.). The `Disguise` is
 active whenever the state machine is in `Disguised` or `Decoyed`. Contract and
-shipped registry are defined in `02-disguise.md`.
+specified registry are defined in `02-disguise.md`.
 
 **`DuressEvent`** — A signal emitted when an `AuthChallenge` returns `Duress`.
 Receipt of a `DuressEvent` `MUST` immediately invoke the registered `WipeHandler`
@@ -105,7 +106,9 @@ received. Tier semantics and the ordering guarantee are defined in
 
 The canonical state machine governs every conformant implementation. A conformant
 implementation `MUST` implement all states and `MUST` not introduce transitions
-not listed in the Transition Contract below.
+not listed in the Transition Contract below. This is the normative full draft
+machine, not a description of shipped mobile functionality. The Node reference
+implements only the subset listed in [module 08](./08-conformance-testing.md).
 
 ```mermaid
 stateDiagram-v2
@@ -116,10 +119,10 @@ stateDiagram-v2
     Authenticating --> Wiping: AuthChallenge → Duress
     Authenticating --> Disguised: AuthChallenge → Reject
     Authenticating --> Recovering: AuthChallenge → Recover
-    Active --> Disguised: app killed / explicit lock
+    Active --> Disguised: background / lock / restart
     Wiping --> Decoyed: wipe complete (success or fail-open)
     Wiping --> Disguised: fail-closed configured + handler error
-    Decoyed --> Disguised: app killed
+    Decoyed --> Disguised: lock / restart
     Recovering --> Active: recovery key validated
     Recovering --> Disguised: recovery key rejected
 ```
@@ -139,8 +142,9 @@ application's true nature. `Init` has no user-visible representation.
 application presents as the configured decoy app type (calculator, notes, etc.).
 The implementation `MUST` accept user input in `Disguised` in a way that is
 visually consistent with the disguise, and `MUST` route that input through the
-`AuthChallenge` chain. No unlock credential `MUST` be stored in memory when the
-state machine is in `Disguised`.
+`AuthChallenge` chain. No retained unlock secret or completed credential `MUST`
+be stored in memory in `Disguised`; transient partial input awaiting evaluation
+follows the accumulation and reset rules in `01-authentication.md`.
 
 ### Authenticating
 
@@ -166,7 +170,8 @@ an adversary always starts from `Disguised`, not `Active`.
 
 `Wiping` is entered when an `AuthChallenge` returns `Duress`. The implementation
 `MUST` invoke every registered `WipeHandler` for the configured `WipeTier` in
-tier-ascending order (lowest tier first). The `Disguise` UI `MUST` remain visible
+tier-ascending order (lowest tier first), sequentially in registration order
+within each tier. The `Disguise` UI `MUST` remain visible
 to an observer during `Wiping`; no progress indicator, spinner, or error dialog
 `MUST` be shown that could reveal wipe activity. On completion — whether all
 handlers succeed or the fail-open policy applies — the state machine transitions
@@ -179,8 +184,8 @@ place of the `Disguise`. The `Decoy` `MUST` be fully functional with respect to
 its configured credibility tier (see `03-decoy.md`): it `MUST` respond to
 interaction, display plausible content, and `MUST-NOT` expose any reference to
 real user data. The `Decoyed` state persists until the application process is
-killed; on the next launch the state machine begins at `Init` and proceeds to
-`Disguised`.
+killed or explicitly locked. Lock returns to `Disguised`; on the next launch
+the state machine begins at `Init` and proceeds to `Disguised`.
 
 ### Recovering
 
@@ -195,21 +200,28 @@ data is made available. If the `RecoveryKey` is invalid, the implementation
 
 ### Transition Contract
 
-The following table defines every permitted state transition. An implementation
-`MUST-NOT` perform a transition not listed here.
+The following table defines every permitted state transition in the full draft
+machine. An implementation claiming full conformance `MUST-NOT` perform a
+transition not listed here. Only terminal authentication results enter this
+table; accumulated input without a terminal result causes no result transition.
+Restart rows summarize process termination followed by `Init` and initialization;
+they do not preserve an authenticated session. Pending fail-closed wipe work
+`MUST` block every transition to `Active` until completion is confirmed.
 
 | From | Event | Guard | To | Side effects |
 |---|---|---|---|---|
+| `Init` | initialization completes or manifest validation fails | pending wipe work handled per failure policy | `Disguised` | load and validate configuration; initialize handlers when valid; suppress diagnostic UI |
 | `Disguised` | input received | input matches some `AuthChallenge` shape | `Authenticating` | start 300–600 ms timer (timing-attack defense) |
 | `Authenticating` | challenge returns `Unlock` | tier-specific feature checks pass | `Active` | reveal Active UI; emit `audit.unlock` if configured |
 | `Authenticating` | challenge returns `Duress` | always | `Wiping` | emit `DuressEvent`; invoke registered `WipeHandler`s in tier order |
 | `Authenticating` | challenge returns `Reject` | always | `Disguised` | reset `AuthChallenge` state; do not log attempts in plaintext |
 | `Authenticating` | challenge returns `Recover` | only if `Recoverable-Lock` tier configured | `Recovering` | prompt for `RecoveryKey` |
-| `Wiping` | all handlers complete | always | `Decoyed` | display configured `Decoy` |
-| `Wiping` | handler error AND fail-closed configured | configured failure policy = `fail-closed` | `Disguised` | retry handler at next launch |
+| `Wiping` | all handlers complete or fail-open permits continuation | no blocking fail-closed failure | `Decoyed` | display configured `Decoy`; retain incomplete-work record when required |
+| `Wiping` | handler error or duration abort | handler policy = `fail-closed` | `Disguised` | retain pending work; retry at next launch; block `Active` |
 | `Recovering` | `RecoveryKey` validates | always | `Active` | merge recovered data; resume normal operation |
 | `Recovering` | `RecoveryKey` invalid | attempt count < N | `Disguised` | rate-limit |
-| `Active` | app killed | always | `Disguised` | wipe in-memory unlock state |
+| `Active` | background, explicit lock, or process restart | always | `Disguised` | wipe in-memory unlock state; restart reinitializes |
+| `Decoyed` | explicit lock or process restart | always | `Disguised` | discard decoy session state; restart reinitializes |
 
 ### Failure-Mode Transitions
 
@@ -218,8 +230,10 @@ machine is in `Wiping`, the implementation `MUST` record a persistent encrypted
 flag indicating that a wipe was in progress. On the next launch, `Init` `MUST`
 detect this flag and resume the `WipeHandler` chain from the last unconfirmed
 handler before proceeding to `Disguised`. The wipe-resume protocol is defined in
-`04-wipe-protocol.md`. Until wipe completion is confirmed, the implementation
-`MUST-NOT` transition to `Active`.
+`04-wipe-protocol.md`. Until the remaining work completes or has applied
+fail-open decisions, the implementation `MUST-NOT` transition to `Active`.
+Unresolved fail-closed work blocks both `Decoyed` and `Active`; policy-approved
+fail-open work may remain recorded for retry without blocking those states.
 
 **Storage failure during `Wiping`.** If a `WipeHandler` encounters a storage
 error, the fail-open vs. fail-closed policy for that handler governs the outcome.

@@ -1,0 +1,10 @@
+{
+  "profileVersion": "0.1",
+  "name": "illegal-transition",
+  "manifest": "../../examples/manifests/coercion-calculator.json",
+  "events": [
+    { "type": "auth-result", "outcome": "Unlock" }
+  ],
+  "handlerOutcomes": {},
+  "expectedError": "TRANSITION_INVALID"
+}

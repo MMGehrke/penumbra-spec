@@ -6,6 +6,13 @@
 
 ## Purpose
 
+This is a full draft UI and content contract. No decoy mobile component or SDK
+ships in this repository. The executable `decoy-tourist-info` artifact is a
+profile fixture, described in [module 08](./08-conformance-testing.md). Galois
+source paths below are external historical references, not repository files or
+verified current code. Paths under conformance/test-vectors refer to planned
+v0.2 artifacts; none of those future vectors are present here.
+
 This module defines the user-visible artifact shown after a `DuressEvent` has
 been processed and the `WipeHandler` chain has completed: the `Decoy`. Its job
 is to satisfy an inspector's curiosity long enough that they hand the device
@@ -33,8 +40,12 @@ A `Decoy` is the UI shown after a `DuressEvent` has been processed and
 enough that they hand the device back without further questioning. The
 `Decoy`'s defense is plausibility — the inspector concludes the app was a
 mundane app the user happened to be in — not concealment. By the time the
-`Decoy` is on screen, the wipe has already finished; the `Decoy` is the
-inspector-facing cover that explains why the device feels unremarkable.
+`Decoy` is on screen, the wipe chain has either completed successfully or
+applied fail-open to incomplete work per `04-wipe-protocol.md`. Such work may
+remain recorded for retry; unresolved fail-closed work blocks entry to
+`Decoyed`. References to wipe completion in this module mean that policy
+boundary, not a guarantee that every data operation succeeded. The `Decoy` is
+the inspector-facing cover that explains why the device feels unremarkable.
 
 The interface is expressed below in pseudo-code; ports `MUST` provide an
 idiomatic equivalent in their host language while preserving the semantics of
@@ -74,16 +85,14 @@ interface Decoy {
   // it has no input to forward (see Input Contract below).
   mount(bundle: DecoyContent): void;
 
-  // Called by the SDK when the decoy must be torn down. The only
-  // permitted teardown trigger is the application process being killed
-  // by the OS or the user (per 00-architecture.md, the Decoyed state
-  // persists until process death and the next launch starts at Init).
+  // Called by the SDK on explicit lock or orderly process teardown.
+  // These end the Decoyed session per 00-architecture.md. Abrupt process
+  // death also ends the session but cannot guarantee an unmount call.
   // unmount() MUST release every resource the decoy holds — listeners,
   // timers, in-memory transient state, render state — before returning.
   // The SDK MUST NOT call mount() a second time on the same Decoy
-  // instance: the Decoyed → Disguised transition happens only by
-  // process kill, after which the next launch instantiates a fresh
-  // Decoy if the duress path is reached again.
+  // instance. After explicit lock or process restart, reaching the
+  // duress path again requires a fresh Decoy and freshly loaded bundle.
   unmount(): void;
 }
 
@@ -160,21 +169,24 @@ state. A `Decoy` `MUST-NOT` be reachable from `Init`, `Disguised`,
 `Authenticating`, `Active`, or `Recovering`; ports that wire any other
 mount path are non-conformant.
 
-The `Decoyed` state persists until the application process is killed. Per
-`00-architecture.md`, the canonical `Decoyed → Disguised` transition is
-"app killed"; on the next launch, the state machine begins at `Init` and
-proceeds through `Init → Disguised` per the canonical sequence. The SDK
-`MUST-NOT` cache the previously-displayed `Decoy` content across process
-death; the previously-mounted `Decoy` instance is gone with the process,
-and if the duress path is reached again on a future launch the SDK
-mounts a fresh `Decoy` instance against a freshly-loaded
-`DecoyContent`. The `Decoy` `MUST-NOT` persist any state across process
-restarts (no shared preferences, no on-disk caches of "last viewed
-museum," no resumable session).
+The `Decoyed` state persists until explicit lock or process termination.
+Per `00-architecture.md`, explicit lock performs `Decoyed → Disguised` within
+the current process. A restart begins at `Init` and proceeds through
+`Init → Disguised`. Both boundaries end the decoy session. On explicit lock,
+the SDK `MUST` discard the mounted decoy instance and its session state;
+after process death the previous instance no longer exists. If the duress
+path is reached again, even within the same process, the SDK `MUST` mount
+a fresh `Decoy` instance against freshly-loaded, validated `DecoyContent`.
+The SDK `MUST-NOT` reuse the previously displayed bundle or transient session
+state across either boundary. The authored on-device bundle remains the input
+for a fresh load. The `Decoy` `MUST-NOT` persist session state across lock or
+restart (no shared preferences, on-disk "last viewed museum" cache, or
+resumable session).
 
-The `Decoy`'s unmount() is invoked only on process kill. The OS handles
-the kill itself; the `Decoy`'s responsibility on kill is to release any
-in-memory resources it holds and return from unmount(). The `Decoy`
+The SDK invokes unmount() on explicit lock and orderly process teardown.
+The `Decoy` `MUST` release its in-memory resources before unmount() returns.
+Abrupt OS termination may prevent that callback; correctness `MUST-NOT`
+depend on teardown running before process death. The `Decoy`
 `MUST-NOT` perform any I/O during unmount() (no log writes, no flush
 of session state, no telemetry) — the unmount path is a clean teardown,
 not a checkpoint.
@@ -195,11 +207,19 @@ be implemented at a layer below the host framework's default screen-
 transition surface, with the `Decoy`'s first frame painted in the same
 render tick that the `Disguise`'s last frame is replaced.
 
+On explicit lock from `Decoyed`, the SDK `MUST` unmount the `Decoy` and mount
+a fresh `Disguise` with empty accumulated input and no decoy session references.
+This reverse handoff follows the same visual-continuity requirement and
+`MUST-NOT` render `Active` UI, restore an authenticated session, or expose
+real user data. Pending fail-closed wipe work remains subject to module 00's
+`Active` guard. Only a subsequent valid authentication transition may reach
+`Active`; a subsequent duress path mounts a new decoy as described above.
+
 If the `Decoy`'s mount() throws, returns abnormally, or fails to render
 its UI within an implementation-defined timeout, the SDK `MUST` fall
 back to the safety-fallback decoy described in the Content-Bundle
-Protocol section below. That fallback is itself a `Glance`-tier
-hardcoded decoy bundled inside the SDK; mounting it `MUST` use the same
+Protocol section below. A future SDK implementing this draft `MUST` bundle
+that hardcoded `Glance`-tier decoy; mounting it `MUST` use the same
 visual-continuity contract above.
 
 ### Crash Resistance
@@ -471,17 +491,17 @@ Per-tier deployment requirements:
 
 ## Content-Bundle Protocol
 
-Decoy content is shipped as a JSON bundle conforming to
-`schemas/decoy-content.schema.json` (forward reference; the schema is
-authored as a later task in the implementation plan, the same way
-`04-wipe-protocol.md` forward-references `manifest.schema.json`). The
+The full draft proposes decoy content as a JSON bundle with the fields below.
+The repository's [decoy schema](../schemas/decoy-content.schema.json) implements
+only module 08's profileVersion, decoyId, credibilityTier, locale, and content
+fields. It does not implement this full draft payload/meta contract. The
 bundle protocol decouples the `Decoy`'s *visual presentation* (the
 `Decoy` implementation) from the *content* the visualization renders.
 This separation lets a deployment swap content (different museum lists
 for different cities, locale variants, themed bundles for cover stories)
 without recompiling or revalidating the `Decoy` code.
 
-A bundle has the following normative fields, validated by the schema:
+A full draft bundle has the following normative fields for a future schema:
 
 - decoyId — the `Decoy` implementation this bundle targets. The SDK
   validates that this equals the mounting `Decoy`'s id; mismatches
@@ -523,8 +543,9 @@ Bundles `SHOULD` localize like `Disguise` content does in
 device's primary locale is available, the SDK `MUST` load it; when it
 is not, the SDK `MUST` fall back to the localization the genuine app's
 platform-native equivalent uses on the same device. For the
-`decoy-tourist-info` reference implementation, the SDK ships an en-US
-bundle that serves as the per-decoy locale fallback (used when a
+`decoy-tourist-info` profile fixture, this repository includes en-US content,
+but no UI or locale fallback runtime. A future port's default bundle would
+serve as the per-decoy locale fallback (used when a
 deployment-authored bundle for the device locale is not available). The
 per-decoy locale fallback is distinct from the cross-decoy
 *safety-fallback decoy* (Safety-Fallback Decoy subsection below):
@@ -540,8 +561,8 @@ explicit conformance-manifest documentation.
 
 Bundles `MAY` ship by any of the following routes:
 
-- Inside the SDK package (the SDK ships a default bundle for each
-  shipped `Decoy` implementation, for use as a deployment's primary
+- Inside a future SDK package (a port may ship a default bundle for each
+  implemented `Decoy`, for use as a deployment's primary
   content bundle in single-locale builds).
 - Alongside the host app at install time (the embedding application
   bundles its own authored content into the app binary; this is the
@@ -573,11 +594,12 @@ post-recovery review can identify which bundle failed to load and why.
 
 ### Safety-Fallback Decoy
 
-The SDK ships a hardcoded minimal `Glance`-tier decoy whose sole purpose
-is to serve as the safety fallback when the configured bundle fails to
-load or the configured `Decoy`'s mount() throws. The fallback is
-implemented inside the SDK rather than as a separate bundle so it
-cannot itself fail bundle validation. The SDK-baked safety fallback is
+A future SDK implementing this draft `MUST` provide a hardcoded minimal
+`Glance`-tier decoy to serve as the safety fallback when the configured bundle
+fails to load or the configured `Decoy`'s mount() throws. No such component
+ships in this repository or its limited executable profile. The port `MUST`
+implement the fallback inside the SDK rather than as a separate bundle so it
+does not depend on bundle validation. The SDK-baked safety fallback is
 distinct from the per-decoy primary content bundles described in the
 Bundle Distribution section above; the safety fallback is a hardcoded
 component, while per-decoy primary bundles are JSON artifacts subject
@@ -599,7 +621,7 @@ ports `MAY` choose richer content provided they document it in the
 conformance manifest, but `SHOULD` converge on the v0.2 vector when
 published.
 
-The SDK ships the same fallback content across all configured decoy
+An SDK implementing this draft `MUST` use the same fallback content across all configured decoy
 implementations so an inspector who reaches the fallback path on
 multiple devices or deployments cannot distinguish them by fallback
 content. Deployments that configured different `Decoy` implementations
@@ -624,28 +646,24 @@ on the inputs the component currently handles.
 
 ### decoy-tourist-info
 
-The generic decoy implementation `decoy-tourist-info` is the v0.1
-canonical migration target for Galois's `components/DecoyMode.js`. It
-is the spec's reference example of how a deployment-specific hardcoded
-decoy migrates to the bundle-driven decoy contract. It is not a member
-of a fixed shipped registry the way each `Disguise` registry entry is
-in `02-disguise.md` — the v0.1 decoy registry is open to deployment-
-authored decoy implementations under the same general rules that govern
-custom disguises in `02-disguise.md`'s Custom Disguises section. The
-`decoy-tourist-info` id is the SDK-shipped reference; embedding
-applications `MAY` register their own decoy ids alongside it.
+The identifier `decoy-tourist-info` names the limited profile fixture in
+[tourist-info.json](../examples/decoy-content/tourist-info.json). It is not an
+SDK-shipped mobile component. The draft also uses that ID for a proposed
+migration of Galois's external historical `components/DecoyMode.js` to a
+bundle-driven component; that migration has not been implemented here.
+The full draft decoy registry is open to deployment-authored implementations
+under the Custom Decoys rules below.
 
 ### Migration Path to Conformant Decoy
 
-Per this spec, the existing `DecoyMode.js` content migrates to a
-`decoy-content.schema.json`-conformant bundle named
-`travel-tourist-info.glance.v1.json`, and the component itself becomes
+The proposed migration would move the external `DecoyMode.js` content to
+a future full-draft-schema bundle named
+`travel-tourist-info.glance.v1.json` (a planned artifact, not a repository file), and the component would become
 a generic decoy implementation with id `decoy-tourist-info` that
 consumes any bundle whose decoyId equals `decoy-tourist-info`.
 
-The `decoy-tourist-info` implementation's per-decoy bundle schema is
-authored as part of `decoy-content.schema.json` (forward reference,
-per the Content-Bundle Protocol section above). Its payload schema
+The proposed component's per-decoy bundle schema is not implemented in the
+current `decoy-content.schema.json`. The proposed full draft payload schema
 specifies four content arrays — museums, transportation, restaurants,
 attractions — each containing entries with the fields the existing
 `DecoyMode.js` already renders (name, description, image reference,
@@ -659,7 +677,8 @@ bundle drives Galois, the React Native shell, and any future port.
 
 ### Upgrade to `Inspection` Tier
 
-The migrated `decoy-tourist-info` is `Glance`-tier as authored. To
+The proposed migrated `decoy-tourist-info` component would begin at `Glance`
+tier; this is distinct from the profile fixture's declared metadata. To
 upgrade to `Inspection` tier, the implementation `MUST` add the
 following capabilities. Each capability is a normative bullet for the
 upgrade; an implementation that adds some but not all `MUST-NOT-CLAIM`
@@ -731,7 +750,7 @@ implementation, the following rules `MUST` be honored:
 ## Custom Decoys
 
 Unlike the `Disguise` registry, which is closed in v0.1 (every conformant
-deployment uses one of the five entries in `02-disguise.md`'s Shipped
+deployment uses one of the five entries in `02-disguise.md`'s Specified
 Registry), the `Decoy` registry is **open**: deployments `MAY` ship their
 own `Decoy` implementations under deployment-authored decoy ids. The
 asymmetry is principled — `Disguise` ships against OS-level fingerprint
@@ -742,7 +761,7 @@ implementation into an SDK registry would create needless friction for
 what is essentially "a component that reads a JSON bundle."
 
 A custom `Decoy` `MUST` satisfy every requirement that applies to the
-SDK-shipped `decoy-tourist-info`:
+proposed `decoy-tourist-info` mobile implementation:
 
 - Implement the `Decoy` contract exactly (every interface member;
   the resetAccumulatedState() method from `02-disguise.md` is N/A
@@ -757,8 +776,8 @@ SDK-shipped `decoy-tourist-info`:
   declares `Sustained` `MUST-NOT-CLAIM` conformance unless its content
   graph satisfies every `Sustained` requirement in the Credibility
   Tiers section.
-- Document its bundle schema. Because `decoy-content.schema.json` uses
-  per-decoy $refs for the payload field, a custom decoy id
+- Document its bundle schema. The full draft proposes
+  per-decoy $refs for the payload field, so a custom decoy id
   contributes its own sub-schema. The deployment `MUST` publish this
   sub-schema and `MUST` reference it from `decoy-content.schema.json`
   (in v0.2 this is enforced by schema validation; in v0.1 it is a
@@ -767,12 +786,12 @@ SDK-shipped `decoy-tourist-info`:
   published checklist lives in `02-disguise.md`'s Fingerprint Avoidance
   section and applies to `Decoy` implementations equally).
 
-A custom decoy id `MUST` not collide with any SDK-shipped id (currently
-just `decoy-tourist-info`). Deployments `SHOULD` namespace their decoy
+A custom decoy id `MUST` not collide with the reserved profile fixture id
+`decoy-tourist-info`. Deployments `SHOULD` namespace their decoy
 ids (e.g., `acme-corp/notes-style-decoy`) to avoid future collisions as
 the SDK adds more shipped decoys.
 
 Apps that fail any of the above `MUST-NOT-CLAIM` conformance. The SDK
-refuses to mount a `Decoy` whose id is not registered (either as an
-SDK-shipped id or as a deployment-registered custom id) and falls back
+refuses to mount a `Decoy` whose id is not registered (either as a
+reserved reference id or as a deployment-registered custom id) and falls back
 to the safety-fallback decoy per the Safety-Fallback Decoy subsection.

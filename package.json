@@ -4,12 +4,17 @@
   "private": true,
   "description": "Cross-platform plausible-deniability spec — tooling for validation and linting",
   "scripts": {
-    "validate": "ajv validate -s schemas/manifest.schema.json -d \"examples/*.json\" && ajv validate -s schemas/decoy-content.schema.json -d \"conformance/test-vectors/03-decoy/*.json\"",
-    "lint": "markdownlint \"spec/**/*.md\" \"README.md\" \"CHANGELOG.md\"",
+    "validate": "node tools/validate-artifacts.mjs",
+    "test": "node --test",
+    "lint": "markdownlint \"spec/**/*.md\" \"docs/**/*.md\" \"README.md\" \"CHANGELOG.md\"",
     "xref": "node tools/xref-lint.mjs",
-    "ci": "npm run validate && npm run lint && npm run xref"
+    "simulate": "node tools/simulate.mjs",
+    "conformance": "node tools/conformance.mjs",
+    "artifact-lint": "node tools/artifact-lint.mjs",
+    "ci": "npm run validate && npm test && npm run conformance && npm run lint && npm run xref && npm run artifact-lint"
   },
   "devDependencies": {
+    "ajv": "^8.20.0",
     "ajv-cli": "^5.0.0",
     "markdownlint-cli": "^0.41.0"
   }

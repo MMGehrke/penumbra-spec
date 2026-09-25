@@ -1,0 +1,18 @@
+{
+  "profileVersion": "0.1",
+  "threatTier": "Coercion",
+  "disguise": { "id": "calculator-ios" },
+  "authentication": { "method": "math-result" },
+  "wipe": {
+    "tier": "Medium",
+    "handlers": [
+      { "id": "revoke-session", "tier": "Soft", "failurePolicy": "fail-open" },
+      { "id": "delete-local-data", "tier": "Medium", "failurePolicy": "fail-closed" }
+    ]
+  },
+  "decoy": {
+    "id": "decoy-tourist-info",
+    "credibilityTier": "Inspection",
+    "content": "../decoy-content/tourist-info.json"
+  }
+}
